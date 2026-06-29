@@ -53,7 +53,7 @@ export default function AvisPage() {
       const raw = res.data as any;
       const avis: Avis[]      = raw.data ?? raw.avis ?? [];
       const rawStats = raw.stats ?? {};
-      const stats: AvisStats  = { moyenne: rawStats.moyenne ?? 0, total: rawStats.total ?? avis.length, distribution: rawStats.distribution ?? {} };
+      const stats: AvisStats  = { moyenne: rawStats.note_moyenne ?? rawStats.moyenne ?? 0, total: rawStats.total ?? avis.length, distribution: rawStats.distribution ?? {} };
       return { avis, stats };
     },
   });
