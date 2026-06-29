@@ -52,7 +52,8 @@ export default function AvisPage() {
       const res = await avisApi.list(filterNote);
       const raw = res.data as any;
       const avis: Avis[]      = raw.data ?? raw.avis ?? [];
-      const stats: AvisStats  = raw.stats ?? { moyenne: 0, total: avis.length, distribution: {} };
+      const rawStats = raw.stats ?? {};
+      const stats: AvisStats  = { moyenne: rawStats.moyenne ?? 0, total: rawStats.total ?? avis.length, distribution: rawStats.distribution ?? {} };
       return { avis, stats };
     },
   });
@@ -72,8 +73,8 @@ export default function AvisPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Note globale */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-[0_2px_12px_0_rgba(0,0,0,0.05)] p-6 flex flex-col items-center justify-center gap-2">
-          <p className="text-[56px] font-extrabold text-gray-900 leading-none">{stats.moyenne.toFixed(1)}</p>
-          <Stars note={Math.round(stats.moyenne)} size={20} />
+          <p className="text-[56px] font-extrabold text-gray-900 leading-none">{(stats.moyenne ?? 0).toFixed(1)}</p>
+          <Stars note={Math.round(stats.moyenne ?? 0)} size={20} />
           <p className="text-sm text-gray-400 font-medium">{stats.total} avis au total</p>
         </div>
 
