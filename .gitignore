@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Variables d'environnement — jamais commitées, générées par le CI (voir
+# .github/workflows/deploy.yml) à partir du secret GitHub VITE_API_URL
+.env
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
