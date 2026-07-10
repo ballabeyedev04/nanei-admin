@@ -5,7 +5,7 @@ import { adminsApi } from '@/api/admins';
 import { colisApi } from '@/api/colis';
 import { useAuthStore } from '@/store/authStore';
 import { PageSpinner } from '@/components/ui/Spinner';
-import { formatDate } from '@/utils/format';
+import { formatDate, formatPrice } from '@/utils/format';
 import { Badge } from '@/components/ui/Badge';
 import type { Colis } from '@/types';
 
@@ -193,7 +193,7 @@ export default function DashboardPage() {
                     </td>
                     <td className="px-5 py-4 text-sm font-medium text-gray-700">{c.destination}</td>
                     <td className="px-5 py-4 text-sm text-gray-600">{c.poids} kg</td>
-                    <td className="px-5 py-4 text-sm font-semibold text-gray-800">{c.prix} €</td>
+                    <td className="px-5 py-4 text-sm font-semibold text-gray-800">{formatPrice(c.prix)}</td>
                     <td className="px-5 py-4">{statusBadge(c.statut)}</td>
                     <td className="px-5 py-4 text-sm text-gray-400">{formatDate(c.createdAt)}</td>
                   </tr>

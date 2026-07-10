@@ -351,7 +351,7 @@ export default function CountriesPage() {
                         </div>
                       </td>
                       <td className="px-5 py-4">
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">{formatPrice(r.priceAerienPerKg)} €/kg</span>
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">{formatPrice(r.priceAerienPerKg)}/kg</span>
                       </td>
                       <td className="px-5 py-4">
                         <div className="flex flex-col gap-0.5 text-xs text-teal-700">
@@ -360,7 +360,7 @@ export default function CountriesPage() {
                         </div>
                       </td>
                       <td className="px-5 py-4">
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-bold bg-teal-50 text-teal-700 border border-teal-200">{formatPrice(r.priceMaritimePerKg)} €/kg</span>
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-bold bg-teal-50 text-teal-700 border border-teal-200">{formatPrice(r.priceMaritimePerKg)}/kg</span>
                       </td>
                       <td className="px-5 py-4">
                         <ActionBtns onEdit={() => openShipEdit(r)} onDelete={() => handleDeleteShip(r)} />
@@ -405,12 +405,12 @@ export default function CountriesPage() {
                       <td className="px-5 py-4 text-sm font-bold text-gray-900">{r.country?.name ?? r.countryId}</td>
                       <td className="px-5 py-4">
                         <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-[#FFF4E8] text-[#FF7A00] border border-orange-200">
-                          {formatPrice(r.prixRecuperation)} €
+                          {formatPrice(r.prixRecuperation)}
                         </span>
                       </td>
                       <td className="px-5 py-4">
                         <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-violet-50 text-violet-700 border border-violet-200">
-                          {formatPrice(r.prixLivraison)} €
+                          {formatPrice(r.prixLivraison)}
                         </span>
                       </td>
                       <td className="px-5 py-4">
