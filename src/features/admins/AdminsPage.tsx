@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { PageSpinner } from '@/components/ui/Spinner';
 import { notifySuccess, notifyError } from '@/utils/notify';
-import { getInitials, formatDate } from '@/utils/format';
+import { formatDate } from '@/utils/format';
 import { confirmDeactivate, confirmActivate } from '@/utils/confirm';
 import type { User as UserType } from '@/types';
 
@@ -194,9 +194,6 @@ export default function AdminsPage() {
                   <tr key={a.id} className="hover:bg-[#FFF9F5] transition-colors duration-150 group">
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-[#FFF4E8] rounded-2xl flex items-center justify-center text-[#FF7A00] text-xs font-extrabold flex-shrink-0">
-                          {getInitials(a.nom, a.prenom)}
-                        </div>
                         <div>
                           <p className="text-sm font-bold text-gray-900">{a.prenom} {a.nom}</p>
                           <div className="flex items-center gap-1 mt-0.5">

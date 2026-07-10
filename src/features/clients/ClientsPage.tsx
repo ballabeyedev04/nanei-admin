@@ -5,7 +5,7 @@ import { clientsApi } from '@/api/clients';
 import logger from '@/lib/logger';
 import { Badge } from '@/components/ui/Badge';
 import { PageSpinner } from '@/components/ui/Spinner';
-import { getInitials, formatDate } from '@/utils/format';
+import { formatDate } from '@/utils/format';
 import { confirmDeactivate, confirmActivate } from '@/utils/confirm';
 import { notifySuccess, notifyError } from '@/utils/notify';
 import type { User } from '@/types';
@@ -107,9 +107,6 @@ export default function ClientsPage() {
                   <tr key={c.id} className="hover:bg-[#FFF9F5] transition-colors duration-150 group">
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600 text-xs font-extrabold flex-shrink-0">
-                          {getInitials(c.nom, c.prenom)}
-                        </div>
                         <p className="text-sm font-bold text-gray-900">{c.prenom} {c.nom}</p>
                       </div>
                     </td>
