@@ -57,8 +57,11 @@ export default function DashboardLayout() {
         </div>
       </div>
 
-      {/* Nav */}
-      <nav className="flex-1 px-3 py-4 space-y-0.5">
+      {/* Nav — scrollable indépendamment du logo (fixe en haut) et du bloc
+          utilisateur/déconnexion (fixe en bas), pour que "Déconnexion" reste
+          toujours accessible même quand la liste de menu dépasse la hauteur
+          de l'écran (13 items sur un petit écran, par ex.) */}
+      <nav className="flex-1 min-h-0 overflow-y-auto px-3 py-4 space-y-0.5">
         {NAV.map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
