@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, UserCog, Globe,
   LogOut, Menu, ChevronRight, User, MessageSquare, Package, CreditCard,
-  AlertTriangle, Star, Shield, BarChart2, Download,
+  AlertTriangle, Star, Shield, BarChart2, Download, Tag,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { authApi } from '@/api/auth';
@@ -17,6 +17,7 @@ const NAV = [
   { to: '/nanei/admin/gestion-admin',    icon: UserCog,         label: 'Administrateurs'   },
   { to: '/nanei/admin/gestion-client',   icon: Users,           label: 'Clients'           },
   { to: '/nanei/admin/gestion-colis',    icon: Package,         label: 'Colis'             },
+  { to: '/nanei/admin/etiquettes',       icon: Tag,             label: 'Étiquettes'        },
   { to: '/nanei/admin/paiements',        icon: CreditCard,      label: 'Paiements'         },
   { to: '/nanei/admin/gestion-pays',     icon: Globe,           label: 'Pays & Tarifs'     },
   { to: '/nanei/admin/gestion-messages', icon: MessageSquare,   label: 'Messages clients'  },

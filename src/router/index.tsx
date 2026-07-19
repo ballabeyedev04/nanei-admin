@@ -9,6 +9,7 @@ import DashboardPage  from '@/features/dashboard/DashboardPage';
 import AdminsPage     from '@/features/admins/AdminsPage';
 import ClientsPage    from '@/features/clients/ClientsPage';
 import ColisPage      from '@/features/colis/ColisPage';
+import EtiquettesPage from '@/features/etiquettes/EtiquettesPage';
 import CountriesPage  from '@/features/countries/CountriesPage';
 import ProfilePage    from '@/features/profile/ProfilePage';
 import MessagesPage    from '@/features/messages/MessagesPage';
@@ -27,6 +28,7 @@ export const PATHS = {
   ADMINS:           '/nanei/admin/gestion-admin',
   CLIENTS:          '/nanei/admin/gestion-client',
   COLIS:            '/nanei/admin/gestion-colis',
+  ETIQUETTES:       '/nanei/admin/etiquettes',
   PAYS:             '/nanei/admin/gestion-pays',
   MESSAGES:         '/nanei/admin/gestion-messages',
   PAIEMENTS:        '/nanei/admin/paiements',
@@ -98,6 +100,7 @@ export const router = createBrowserRouter([
           { path: 'gestion-admin',          element: <AdminsPage />     },
           { path: 'gestion-client',         element: <ClientsPage />    },
           { path: 'gestion-colis',          element: <ColisPage />      },
+          { path: 'etiquettes',             element: <EtiquettesPage /> },
           { path: 'gestion-pays',           element: <CountriesPage />  },
           { path: 'gestion-messages',       element: <MessagesPage />   },
           { path: 'paiements',              element: <PaiementsPage />    },
