@@ -23,6 +23,7 @@ export interface Colis {
   createdAt: string;
   expediteur?: { id: string; nom: string; prenom: string; email: string };
   recepteur?: { id: string; nom: string; prenom: string; email: string };
+  lot_id?: string | null;
 }
 
 export interface Country {

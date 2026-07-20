@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Search, Clock, Truck, CheckCircle, Package, ChevronDown, X, Camera, Upload } from 'lucide-react';
+import { Search, Clock, Truck, CheckCircle, Package, ChevronDown, X, Camera, Upload, Layers } from 'lucide-react';
 import { colisApi } from '@/api/colis';
 import { preuveLivraisonApi } from '@/api/preuveLivraison';
 import logger from '@/lib/logger';
@@ -240,6 +240,13 @@ export default function ColisPage() {
     c.destination.toLowerCase().includes(search.toLowerCase())
   );
 
+  // Nombre de colis par lot_id — pour afficher le badge "Lot (n)" uniquement
+  // quand un lot regroupe réellement plusieurs colis.
+  const tailleLot = colis.reduce((acc: Record<string, number>, c: Colis) => {
+    if (c.lot_id) acc[c.lot_id] = (acc[c.lot_id] ?? 0) + 1;
+    return acc;
+  }, {});
+
   const statusMut = useMutation({
     mutationFn: ({ id, action }: { id: string; action: Colis['statut'] }) => {
       if (action === 'en_attente') return colisApi.setEnAttente(id);
@@ -351,7 +358,18 @@ export default function ColisPage() {
                 ) : filtered.map((c: Colis) => (
                   <tr key={c.id} className="hover:bg-[#FFF9F5] transition-colors duration-150 group">
                     <td className="px-5 py-4 whitespace-nowrap">
-                      <span className="text-sm font-bold text-[#FF7A00]">{c.reference}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-[#FF7A00]">{c.reference}</span>
+                        {c.lot_id && tailleLot[c.lot_id] > 1 && (
+                          <span
+                            title={`Fait partie d'un lot de ${tailleLot[c.lot_id]} colis (même commande)`}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-violet-50 text-violet-600 border border-violet-200"
+                          >
+                            <Layers size={10} />
+                            Lot ({tailleLot[c.lot_id]})
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-5 py-4 text-sm font-medium text-gray-700 whitespace-nowrap">
                       {c.expediteur ? `${c.expediteur.prenom} ${c.expediteur.nom}` : '—'}
