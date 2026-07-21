@@ -2,12 +2,12 @@ import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, Pencil, Trash2, Globe, Plane, Ship, Wrench,
+  Plus, Pencil, Trash2, Globe, Plane, Ship, Wrench, Coins,
   MapPin, Hash, ToggleRight, Loader2, ArrowRight,
 } from 'lucide-react';
-import { countriesApi, shippingRatesApi, serviceRatesApi } from '@/api/countries';
+import { countriesApi, shippingRatesApi, serviceRatesApi, tauxChangeApi } from '@/api/countries';
 import logger from '@/lib/logger';
-import type { ShippingRate, ServiceRate } from '@/api/countries';
+import type { ShippingRate, ServiceRate, TauxChange } from '@/api/countries';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { PageSpinner } from '@/components/ui/Spinner';
@@ -16,7 +16,7 @@ import { confirmAction } from '@/utils/confirm';
 import { notifySuccess, notifyError } from '@/utils/notify';
 import type { Country } from '@/types';
 
-type Tab = 'countries' | 'shipping' | 'service';
+type Tab = 'countries' | 'shipping' | 'service' | 'taux';
 
 /* ── Champ réutilisable ───────────────────────────────────────────── */
 function Field({ label, icon: Icon, required, children }: {
@@ -220,10 +220,37 @@ export default function CountriesPage() {
     onError: (e: any) => { logger.error('Erreur suppression tarif service', { page: 'CountriesPage', message: e?.response?.data?.message ?? e?.message }); notifyError(e?.response?.data?.message ?? 'Erreur'); },
   });
 
+  /* ── Taux de change (EUR -> FCFA) ── */
+  const [showTauxModal, setShowTauxModal] = useState(false);
+  const [editTaux, setEditTaux] = useState<TauxChange | null>(null);
+  const [tauxForm, setTauxForm] = useState({ valeur: '' });
+
+  const { data: tauxChanges = [], isLoading: loadingTaux } = useQuery({
+    queryKey: ['taux-change'],
+    queryFn: async () => { const res = await tauxChangeApi.list(); return (res.data as any).data ?? []; },
+  });
+
+  const closeTauxModal = () => { setShowTauxModal(false); setEditTaux(null); setTauxForm({ valeur: '' }); };
+
+  const tauxMut = useMutation({
+    mutationFn: (d: typeof tauxForm) => tauxChangeApi.update(editTaux!.id, parseFloat(d.valeur)),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['taux-change'] });
+      logger.action('Taux de change mis à jour', { taux_id: editTaux?.id, valeur: tauxForm.valeur });
+      notifySuccess('Taux de change mis à jour');
+      closeTauxModal();
+    },
+    onError: (e: any) => {
+      logger.error('Erreur mutation taux de change', { page: 'CountriesPage', message: e?.response?.data?.message ?? e?.message });
+      notifyError(e?.response?.data?.message ?? 'Erreur');
+    },
+  });
+
   const TABS = [
     { id: 'countries' as Tab, label: 'Pays',             icon: Globe,  color: 'text-[#FF7A00]',   bg: 'bg-[#FFF4E8]' },
     { id: 'shipping'  as Tab, label: 'Tarifs transport', icon: Plane,  color: 'text-blue-600',    bg: 'bg-blue-50'   },
     { id: 'service'   as Tab, label: 'Tarifs services',  icon: Wrench, color: 'text-violet-600',  bg: 'bg-violet-50' },
+    { id: 'taux'      as Tab, label: 'Taux de change',   icon: Coins,  color: 'text-emerald-600', bg: 'bg-emerald-50' },
   ];
 
   const EmptyState = ({ icon: Icon, text }: { icon: React.ElementType; text: string }) => (
@@ -418,6 +445,54 @@ export default function CountriesPage() {
                           onEdit={() => { setEditSvcRate(r); setSvcForm({ countryId: r.countryId, prixRecuperation: String(r.prixRecuperation), prixLivraison: String(r.prixLivraison) }); setShowSvcModal(true); }}
                           onDelete={() => handleDeleteSvc(r)}
                         />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── TAB: Taux de change ── */}
+      {tab === 'taux' && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-[0_2px_12px_0_rgba(0,0,0,0.05)] overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-emerald-50 flex items-center justify-center">
+                <Coins size={14} className="text-emerald-600" />
+              </div>
+              <h2 className="font-bold text-gray-900">Taux de change</h2>
+              <span className="text-xs text-gray-400 font-medium">— utilisé pour l'affichage FCFA dans le mobile</span>
+            </div>
+          </div>
+          {loadingTaux ? <PageSpinner /> : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead><tr className="bg-gray-50/70 border-b border-gray-100">
+                  <Th>Devise source</Th><Th>Devise cible</Th><Th>Taux</Th><Th>Actions</Th>
+                </tr></thead>
+                <tbody className="divide-y divide-gray-50">
+                  {(tauxChanges as TauxChange[]).length === 0
+                    ? <EmptyState icon={Coins} text="Aucun taux de change configuré" />
+                    : (tauxChanges as TauxChange[]).map((t) => (
+                    <tr key={t.id} className="hover:bg-[#FFF9F5] transition-colors duration-150">
+                      <td className="px-5 py-4 text-sm font-bold text-gray-900">{t.devise_source}</td>
+                      <td className="px-5 py-4 text-sm font-bold text-gray-900">{t.devise_cible}</td>
+                      <td className="px-5 py-4">
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          1 {t.devise_source} = {t.valeur.toLocaleString('fr-FR')} {t.devise_cible}
+                        </span>
+                      </td>
+                      <td className="px-5 py-4">
+                        <button
+                          onClick={() => { setEditTaux(t); setTauxForm({ valeur: String(t.valeur) }); setShowTauxModal(true); }}
+                          className="w-8 h-8 flex items-center justify-center rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-600 transition-all duration-150 active:scale-95"
+                          title="Modifier"
+                        >
+                          <Pencil size={13} />
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -663,6 +738,27 @@ export default function CountriesPage() {
             </div>
           </form>
         )}
+      </Modal>
+
+      {/* ══ MODAL : Taux de change ════════════════════════════════════ */}
+      <Modal
+        open={showTauxModal}
+        onClose={closeTauxModal}
+        title="Modifier le taux de change"
+        subtitle={editTaux ? `${editTaux.devise_source} → ${editTaux.devise_cible}` : ''}
+        icon={<Coins size={18} className="text-emerald-600" />}
+      >
+        <form onSubmit={(e) => { e.preventDefault(); tauxMut.mutate(tauxForm); }} className="space-y-4">
+          <Field label={`Valeur (1 ${editTaux?.devise_source ?? 'EUR'} = ? ${editTaux?.devise_cible ?? 'FCFA'})`} icon={Coins} required>
+            <input inputMode="decimal" required
+              className={inputCls}
+              placeholder="ex : 655.957"
+              value={tauxForm.valeur}
+              onChange={(e) => setTauxForm({ valeur: e.target.value })}
+            />
+          </Field>
+          <ModalActions onCancel={closeTauxModal} pending={tauxMut.isPending} isEdit={true} />
+        </form>
       </Modal>
     </div>
   );

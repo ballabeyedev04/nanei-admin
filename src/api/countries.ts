@@ -58,3 +58,18 @@ export const serviceRatesApi = {
   update: (id: string, data: Partial<ServiceRate>)     => api.put(`/admin/service-rates/${id}`, data),
   delete: (id: string)                     => api.delete(`/admin/service-rates/${id}`),
 };
+
+export interface TauxChange {
+  id: string;
+  devise_source: string;
+  devise_cible: string;
+  valeur: number;
+  updatedAt?: string;
+}
+
+// Taux de conversion EUR -> FCFA — modifiable uniquement, jamais supprimable
+// (pas de route DELETE côté back).
+export const tauxChangeApi = {
+  list:   ()                           => api.get<{ data: TauxChange[] }>('/admin/taux-change'),
+  update: (id: string, valeur: number) => api.put(`/admin/taux-change/${id}`, { valeur }),
+};
