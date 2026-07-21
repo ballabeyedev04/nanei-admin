@@ -1,19 +1,22 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Search, Tag, Download, Printer } from 'lucide-react';
+import { Search, Tag, Download, Printer, FileCode2, ExternalLink, Copy, Check } from 'lucide-react';
 import { colisApi } from '@/api/colis';
 import { etiquettesApi } from '@/api/etiquettes';
 import logger from '@/lib/logger';
 import { PageSpinner } from '@/components/ui/Spinner';
+import { Modal } from '@/components/ui/Modal';
 import { formatDate } from '@/utils/format';
 import { downloadBlob } from '@/utils/download';
-import { notifyError } from '@/utils/notify';
+import { notifyError, notifySuccess } from '@/utils/notify';
 import type { Colis } from '@/types';
 
 export default function EtiquettesPage() {
   const [search, setSearch] = useState('');
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadingZplId, setDownloadingZplId] = useState<string | null>(null);
+  const [zplModal, setZplModal] = useState<{ reference: string; content: string } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const { data: colis = [], isLoading } = useQuery({
     queryKey: ['colis', 'all'],
@@ -47,14 +50,25 @@ export default function EtiquettesPage() {
     setDownloadingZplId(c.id);
     try {
       const res = await etiquettesApi.telechargerZPL(c.id);
-      downloadBlob(res.data as Blob, `etiquette-${c.reference}.zpl`);
+      const blob = res.data as Blob;
+      const content = await blob.text();
+      downloadBlob(blob, `etiquette-${c.reference}.zpl`);
       logger.action('Étiquette ZPL téléchargée', { colis_id: c.id, reference: c.reference });
+      setZplModal({ reference: c.reference, content });
     } catch (err: any) {
       logger.error('Erreur téléchargement étiquette ZPL', { page: 'EtiquettesPage', colis_id: c.id, message: err?.message });
       notifyError('Impossible de télécharger le fichier ZPL');
     } finally {
       setDownloadingZplId(null);
     }
+  };
+
+  const handleCopyZpl = async () => {
+    if (!zplModal) return;
+    await navigator.clipboard.writeText(zplModal.content);
+    setCopied(true);
+    notifySuccess('Contenu ZPL copié');
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -161,6 +175,46 @@ export default function EtiquettesPage() {
           </div>
         )}
       </div>
+
+      {/* ══ MODAL : explication fichier ZPL ══════════════════════════ */}
+      <Modal
+        open={!!zplModal}
+        onClose={() => setZplModal(null)}
+        title="Fichier ZPL téléchargé"
+        subtitle={zplModal?.reference}
+        icon={<FileCode2 size={18} className="text-gray-700" />}
+        maxWidth="max-w-lg"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600 leading-relaxed">
+            Ce fichier <span className="font-mono font-bold text-gray-800">.zpl</span> n'est pas un document à
+            ouvrir comme un PDF — c'est le langage compris nativement par les imprimantes d'étiquettes
+            thermiques (Zebra, Godex, TSC…). Pour l'utiliser :
+          </p>
+          <ol className="space-y-2 text-sm text-gray-600 list-decimal list-inside">
+            <li>Branchez votre imprimante thermique à l'ordinateur ou au réseau.</li>
+            <li>Ouvrez son utilitaire d'impression (ex : Zebra Setup Utilities) et envoyez-lui ce fichier.</li>
+            <li>Ou copiez le contenu ci-dessous et collez-le sur <span className="font-semibold">labelary.com/viewer.html</span> pour voir un aperçu visuel avant impression.</li>
+          </ol>
+          <div className="flex gap-3 pt-2 border-t border-gray-100">
+            <button
+              onClick={handleCopyZpl}
+              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-all"
+            >
+              {copied ? <Check size={15} className="text-emerald-600" /> : <Copy size={15} />}
+              {copied ? 'Copié' : 'Copier le contenu ZPL'}
+            </button>
+            <a
+              href="https://labelary.com/viewer.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-[#FF7A00] hover:bg-[#E06A00] text-white text-sm font-bold shadow-lg shadow-[#FF7A00]/25 transition-all active:scale-[0.98]"
+            >
+              <ExternalLink size={15} /> Ouvrir l'aperçu
+            </a>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

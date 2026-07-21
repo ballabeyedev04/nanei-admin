@@ -3,7 +3,6 @@ import { Users, UserCog, Package, Clock, Truck, CheckCircle, TrendingUp, ArrowUp
 import { clientsApi } from '@/api/clients';
 import { adminsApi } from '@/api/admins';
 import { colisApi } from '@/api/colis';
-import { useAuthStore } from '@/store/authStore';
 import { PageSpinner } from '@/components/ui/Spinner';
 import { formatDate, formatPrice } from '@/utils/format';
 import { Badge } from '@/components/ui/Badge';
@@ -49,8 +48,6 @@ const statusBadge = (s: Colis['statut']) => ({
 
 /* ── Page ──────────────────────────────────────────────────────────── */
 export default function DashboardPage() {
-  const user = useAuthStore((s) => s.user);
-
   const { data: nbClients   = 0 } = useQuery({ queryKey: ['kpi-clients'],   queryFn: async () => { const d = (await clientsApi.count()).data as any; return d.total ?? d.nombre ?? 0; } });
   const { data: nbAdmins    = 0 } = useQuery({ queryKey: ['kpi-admins'],    queryFn: async () => { const d = (await adminsApi.count()).data as any;  return d.data  ?? d.nombre ?? 0; } });
   const { data: nbColis     = 0 } = useQuery({ queryKey: ['kpi-colis'],     queryFn: async () => { const d = (await colisApi.count()).data as any;   return d.nombre_colis ?? d.total ?? d.nombre ?? 0; } });
@@ -77,13 +74,6 @@ export default function DashboardPage() {
       return list.slice(0, 8);
     },
   });
-
-  const greet = () => {
-    const h = new Date().getHours();
-    if (h < 12) return 'Bonjour';
-    if (h < 18) return 'Bon après-midi';
-    return 'Bonsoir';
-  };
 
   const today = new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
   const todayFormatted = today.charAt(0).toUpperCase() + today.slice(1);
@@ -116,7 +106,7 @@ export default function DashboardPage() {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-extrabold text-gray-900 tracking-tight">
-            {greet()}{user?.prenom ? `, ${user.prenom}` : ''}
+            Tableau de bord
           </h1>
           <p className="text-gray-400 text-sm mt-0.5">{todayFormatted} — Vue d'ensemble de votre activité</p>
         </div>
