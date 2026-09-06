@@ -70,15 +70,22 @@ export default function ProfilePage() {
       closePwModal();
     },
     onError: (e: any) => {
-      logger.error('Erreur changement mot de passe', { page: 'ProfilePage', message: e?.response?.data?.message ?? e?.message });
-      notifyError(e?.response?.data?.message ?? 'Erreur');
+      const data = e?.response?.data;
+      const details: string[] | undefined = Array.isArray(data?.details) ? data.details : undefined;
+      const msg = details?.length ? details.join(' • ') : (data?.message ?? e?.message ?? 'Erreur');
+      logger.error('Erreur changement mot de passe', { page: 'ProfilePage', message: msg });
+      notifyError(msg);
     },
   });
 
   const handlePw = (e: React.FormEvent) => {
     e.preventDefault();
     if (pwForm.nouveau !== pwForm.confirmation) { notifyError('Les mots de passe ne correspondent pas'); return; }
-    if (pwForm.nouveau.length < 8) { notifyError('Minimum 8 caractères'); return; }
+    // Politique backend : min 8 caractères, au moins une minuscule, une majuscule et un chiffre.
+    if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,128}$/.test(pwForm.nouveau)) {
+      notifyError('Le mot de passe doit contenir au moins 8 caractères, une majuscule, une minuscule et un chiffre');
+      return;
+    }
     pwMut.mutate({ ancienMotDePasse: pwForm.ancien, nouveauMotDePasse: pwForm.nouveau });
   };
 

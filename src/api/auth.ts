@@ -14,8 +14,14 @@ export const authApi = {
   updateProfile: (data: { nom?: string; prenom?: string; telephone?: string; adresse?: string }) =>
     api.put('/account/modifier-profil', data),
 
+  // Le backend attend { oldPassword, newPassword } (voir changePasswordSchema).
+  // Le middleware de validation retire les clés inconnues : envoyer
+  // ancienMotDePasse/nouveauMotDePasse produisait un 400 « Données invalides ».
   changePassword: (data: { ancienMotDePasse: string; nouveauMotDePasse: string }) =>
-    api.put('/account/change-password', data),
+    api.put('/account/change-password', {
+      oldPassword: data.ancienMotDePasse,
+      newPassword: data.nouveauMotDePasse,
+    }),
 
   /** Demande de réinitialisation de mot de passe admin (envoie l'email) */
   adminForgotPassword: (email: string) =>
