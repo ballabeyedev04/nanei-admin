@@ -1,9 +1,13 @@
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { Search, CheckCircle, XCircle, Users } from 'lucide-react';
 import { clientsApi } from '@/api/clients';
+import { TAILLE_PAGE, versPage } from '@/api/pagination';
+import { useDebounce, useRetourPageVide } from '@/hooks/usePagination';
+import { Pagination } from '@/components/ui/Pagination';
 import logger from '@/lib/logger';
 import { Badge } from '@/components/ui/Badge';
+import { ErreurChargement } from '@/components/ui/ErreurChargement';
 import { PageSpinner } from '@/components/ui/Spinner';
 import { formatDate } from '@/utils/format';
 import { confirmDeactivate, confirmActivate } from '@/utils/confirm';
@@ -13,18 +17,23 @@ import type { User } from '@/types';
 export default function ClientsPage() {
   const qc = useQueryClient();
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const q = useDebounce(search.trim(), 400);
 
-  const { data: clients = [], isLoading } = useQuery({
-    queryKey: ['clients'],
+  // Recherche (nom, prénom, e-mail, téléphone) faite côté serveur via `q`.
+  const { data, isLoading, isError, error: erreurChargement, refetch, isPlaceholderData } = useQuery({
+    queryKey: ['clients', { page, q }],
     queryFn: async () => {
-      const res = await clientsApi.list();
-      return (res.data as any).data ?? (res.data as any).utilisateurs ?? [];
+      const res = await clientsApi.list({ page, limit: TAILLE_PAGE, q });
+      return versPage(res.data.data, res.data.pagination);
     },
+    placeholderData: keepPreviousData,
   });
+  useRetourPageVide(data, page, setPage, isPlaceholderData);
 
-  const filtered = clients.filter((c: User) =>
-    search === '' || `${c.nom} ${c.prenom} ${c.email}`.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = data?.items ?? [];
+  const total = data?.pagination.total ?? 0;
+  const changerRecherche = (texte: string) => { setSearch(texte); setPage(1); };
 
   const toggleMut = useMutation({
     mutationFn: ({ id, action }: { id: string; action: 'activate' | 'deactivate' }) =>
@@ -56,7 +65,7 @@ export default function ClientsPage() {
       <div>
         <h1 className="text-2xl font-extrabold text-gray-900 tracking-tight">Clients</h1>
         <p className="text-gray-400 text-sm mt-0.5">
-          {clients.length} client{clients.length > 1 ? 's' : ''} enregistré{clients.length > 1 ? 's' : ''}
+          {total} client{total > 1 ? 's' : ''} {q ? 'trouvé' : 'enregistré'}{total > 1 ? 's' : ''}
         </p>
       </div>
 
@@ -70,18 +79,18 @@ export default function ClientsPage() {
           </div>
           <input
             className="flex-1 text-sm font-medium outline-none placeholder-gray-400 bg-transparent text-gray-900"
-            placeholder="Rechercher par nom, email..."
+            placeholder="Rechercher par nom, email, téléphone..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => changerRecherche(e.target.value)}
           />
           {search && (
-            <button onClick={() => setSearch('')} className="text-xs text-gray-400 hover:text-gray-600 font-medium transition-colors">
+            <button onClick={() => changerRecherche('')} className="text-xs text-gray-400 hover:text-gray-600 font-medium transition-colors">
               Effacer
             </button>
           )}
         </div>
 
-        {isLoading ? <PageSpinner /> : (
+        {isLoading ? <PageSpinner /> : isError ? <ErreurChargement erreur={erreurChargement} onRetry={() => refetch()} /> : (<>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -141,7 +150,8 @@ export default function ClientsPage() {
               </tbody>
             </table>
           </div>
-        )}
+          <Pagination pagination={data?.pagination} onChange={setPage} chargement={isPlaceholderData} />
+        </>)}
       </div>
     </div>
   );

@@ -5,7 +5,10 @@ import type { User } from '@/types';
 interface AuthState {
   user: User | null;
   token: string | null;
-  setAuth:         (user: User, token: string) => void;
+  /** Refresh token (7 jours) : sert à renouveler `token` (1 h) sans reconnexion. */
+  refreshToken: string | null;
+  setAuth:         (user: User, token: string, refreshToken?: string | null) => void;
+  setTokens:       (token: string, refreshToken: string) => void;
   setUser:         (user: User) => void;
   logout:          () => void;
   clearAuth:       () => void;
@@ -18,15 +21,20 @@ export const useAuthStore = create<AuthState>()(
     (set, get) => ({
       user:  null,
       token: null,
+      refreshToken: null,
 
-      setAuth: (user, token) => set({ user, token }),
+      setAuth: (user, token, refreshToken = null) => set({ user, token, refreshToken }),
+
+      // Après POST /auth/refresh : le back fait tourner le refresh token
+      // (l'ancien est révoqué), il faut toujours garder le nouveau.
+      setTokens: (token, refreshToken) => set({ token, refreshToken }),
 
       setUser: (user) => set({ user }),
 
-      logout: () => set({ user: null, token: null }),
+      logout: () => set({ user: null, token: null, refreshToken: null }),
 
       // Utilisé par les guards pour nettoyer sans effets de bord
-      clearAuth: () => set({ user: null, token: null }),
+      clearAuth: () => set({ user: null, token: null, refreshToken: null }),
 
       isAuthenticated: () => !!get().token && !!get().user,
 
@@ -35,7 +43,7 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'nanei-admin-auth',
-      partialize: (state) => ({ user: state.user, token: state.token }),
+      partialize: (state) => ({ user: state.user, token: state.token, refreshToken: state.refreshToken }),
     }
   )
 );

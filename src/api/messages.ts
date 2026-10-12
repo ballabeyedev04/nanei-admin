@@ -1,4 +1,6 @@
 import { api } from './axios';
+import { nettoyerParams } from './pagination';
+import type { Pagination, ParamsListe } from '@/types';
 
 export interface MessageClient {
   id: string;
@@ -9,7 +11,9 @@ export interface MessageClient {
 }
 
 export const messagesApi = {
-  list:     ()                              => api.get<{ success: boolean; data: MessageClient[] }>('/admin/messages'),
+  /** `q` : e-mail, objet, message. */
+  list:     (params?: ParamsListe)          =>
+    api.get<{ success: boolean; data: MessageClient[]; pagination?: Pagination }>('/admin/messages', { params: nettoyerParams(params) }),
   stats:    ()                              => api.get<{ success: boolean; total: number }>('/admin/messages/stats'),
   repondre: (id: string, reponse: string)  => api.post(`/admin/messages/${id}/repondre`, { reponse }),
 };

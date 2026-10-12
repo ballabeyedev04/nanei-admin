@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Eye, EyeOff, Loader2, CheckCircle, AlertCircle, KeyRound } from 'lucide-react';
 import { authApi } from '@/api/auth';
 import { PATHS } from '@/router';
+import { useAuthStore } from '@/store/authStore';
 
 /**
  * Règles de mot de passe identiques à la politique backend
@@ -48,6 +49,9 @@ export default function ResetPasswordPage() {
       const res = await authApi.adminResetPassword({ token, mot_de_passe: password });
       if (res.data.success) {
         setPageState('success');
+        // Le back a révoqué toutes les sessions de ce compte : on vide aussi la
+        // session locale éventuelle avant de renvoyer à la connexion.
+        useAuthStore.getState().clearAuth();
         // Redirection automatique vers login après 3 secondes
         setTimeout(() => navigate(PATHS.LOGIN, { replace: true }), 3000);
       } else {

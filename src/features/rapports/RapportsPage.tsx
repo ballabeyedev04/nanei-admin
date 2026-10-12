@@ -1,25 +1,32 @@
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { FileText, Download, RefreshCw } from 'lucide-react';
 import { rapportsApi } from '@/api/rapports';
+import { TAILLE_PAGE, versPage } from '@/api/pagination';
+import { useRetourPageVide } from '@/hooks/usePagination';
+import { Pagination } from '@/components/ui/Pagination';
 import logger from '@/lib/logger';
+import { ErreurChargement } from '@/components/ui/ErreurChargement';
 import { PageSpinner } from '@/components/ui/Spinner';
-import { downloadBlob } from '@/utils/download';
+import { downloadBlob, messageErreurTelechargement } from '@/utils/download';
 import { notifySuccess, notifyError } from '@/utils/notify';
 import type { Rapport } from '@/types';
 
 export default function RapportsPage() {
   const [downloading, setDownloading] = useState<string | null>(null);
   const qc = useQueryClient();
+  const [page, setPage] = useState(1);
 
-  const { data: rapports = [], isLoading } = useQuery({
-    queryKey: ['rapports'],
+  const { data, isLoading, isError, error: erreurChargement, refetch, isPlaceholderData } = useQuery({
+    queryKey: ['rapports', { page }],
     queryFn: async () => {
-      const res = await rapportsApi.list();
-      const raw = res.data as any;
-      return (raw.data ?? raw.rapports ?? []) as Rapport[];
+      const res = await rapportsApi.list({ page, limit: TAILLE_PAGE });
+      return versPage<Rapport>(res.data.rapports ?? res.data.data, res.data.pagination);
     },
+    placeholderData: keepPreviousData,
   });
+  useRetourPageVide(data, page, setPage, isPlaceholderData);
+  const rapports = data?.items ?? [];
 
   const generateMut = useMutation({
     mutationFn: () => rapportsApi.generate(),
@@ -42,7 +49,7 @@ export default function RapportsPage() {
       downloadBlob(res.data as Blob, rapport.filename);
     } catch (err: any) {
       logger.error('Erreur téléchargement rapport', { page: 'RapportsPage', filename: rapport.filename, message: (err as Error).message });
-      notifyError('Impossible de télécharger ce rapport');
+      notifyError(await messageErreurTelechargement(err, 'Impossible de télécharger ce rapport'));
     } finally {
       setDownloading(null);
     }
@@ -67,7 +74,7 @@ export default function RapportsPage() {
       </div>
 
       {/* Grille rapports */}
-      {isLoading ? <PageSpinner /> : rapports.length === 0 ? (
+      {isLoading ? <PageSpinner /> : isError ? <ErreurChargement erreur={erreurChargement} onRetry={() => refetch()} /> : rapports.length === 0 ? (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-[0_2px_12px_0_rgba(0,0,0,0.05)] p-16 flex flex-col items-center gap-4">
           <div className="w-14 h-14 rounded-2xl bg-red-50 flex items-center justify-center">
             <FileText size={26} className="text-red-400" />
@@ -76,7 +83,7 @@ export default function RapportsPage() {
             Aucun rapport généré. Les rapports sont générés automatiquement le 1er de chaque mois.
           </p>
         </div>
-      ) : (
+      ) : (<>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {rapports.map((rapport) => (
             <div
@@ -112,7 +119,10 @@ export default function RapportsPage() {
             </div>
           ))}
         </div>
-      )}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-[0_2px_12px_0_rgba(0,0,0,0.05)] overflow-hidden">
+          <Pagination pagination={data?.pagination} onChange={setPage} chargement={isPlaceholderData} bordure={false} />
+        </div>
+      </>)}
     </div>
   );
 }

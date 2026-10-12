@@ -1,12 +1,16 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
   Plus, Pencil, Trash2, Globe, Plane, Ship, Wrench, Coins,
   MapPin, Hash, ToggleRight, Loader2, ArrowRight,
 } from 'lucide-react';
-import { countriesApi, shippingRatesApi, serviceRatesApi, tauxChangeApi } from '@/api/countries';
+import { countriesApi, shippingRatesApi, serviceRatesApi, tauxChangeApi, shippingPricesApi, servicePricesApi } from '@/api/countries';
 import logger from '@/lib/logger';
+import { TAILLE_PAGE, versPage } from '@/api/pagination';
+import { useRetourPageVide } from '@/hooks/usePagination';
+import { Pagination } from '@/components/ui/Pagination';
+import { ErreurChargement } from '@/components/ui/ErreurChargement';
 import type { ShippingRate, ServiceRate, TauxChange } from '@/api/countries';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
@@ -75,6 +79,22 @@ function ModalActions({ onCancel, pending, isEdit }: { onCancel: () => void; pen
 }
 
 /* ═══════════════════════════════════════════════════════════════════ */
+/**
+ * Nombre saisi au clavier : accepte la virgule française (« 4,75 ») et les
+ * espaces (« 655 957 »). `parseFloat` s'arrêtait à la virgule : « 4,75 »
+ * devenait 4 et « 655,957 » devenait 655, sans erreur.
+ */
+function nombreSaisi(valeur: string | number, libelle: string, { min = 0, strict = false } = {}): number {
+  const n = Number(String(valeur).replace(/\s/g, '').replace(',', '.'));
+  if (!Number.isFinite(n)) throw new Error(`${libelle} : nombre invalide`);
+  if (strict ? n <= min : n < min) throw new Error(`${libelle} : doit être ${strict ? 'supérieur à' : 'au moins'} ${min}`);
+  return n;
+}
+
+function verifierTranche(min: number, max: number, mode: string) {
+  if (max <= min) throw new Error(`${mode} : le poids maximum doit être supérieur au poids minimum`);
+}
+
 export default function CountriesPage() {
   const qc = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -86,9 +106,26 @@ export default function CountriesPage() {
   const [editCountry, setEditCountry] = useState<Country | null>(null);
   const [countryForm, setCountryForm] = useState({ name: '', code: '', isActive: true });
 
-  const { data: countries = [], isLoading: loadingCountries } = useQuery({
-    queryKey: ['countries'],
-    queryFn: async () => { const res = await countriesApi.list(); return (res.data as any).data ?? (res.data as any) ?? []; },
+  // Tableau des pays : paginé côté serveur.
+  const [pageCountries, setPageCountries] = useState(1);
+  const {
+    data: pageDataCountries, isLoading: loadingCountries, isError: echecCountries,
+    error: erreurCountries, refetch: refetchCountries, isPlaceholderData: provCountries,
+  } = useQuery({
+    queryKey: ['countries', { page: pageCountries }],
+    queryFn: async () => {
+      const res = await countriesApi.list({ page: pageCountries, limit: TAILLE_PAGE });
+      return versPage(res.data.data, res.data.pagination);
+    },
+    placeholderData: keepPreviousData,
+  });
+  useRetourPageVide(pageDataCountries, pageCountries, setPageCountries, provCountries);
+  const countriesTable = pageDataCountries?.items ?? [];
+
+  // Listes déroulantes des modales de tarifs : appel SANS page → tous les pays.
+  const { data: countries = [] } = useQuery({
+    queryKey: ['countries', 'tous'],
+    queryFn: async (): Promise<Country[]> => (await countriesApi.list()).data.data ?? [],
   });
 
   const countryMut = useMutation({
@@ -124,24 +161,43 @@ export default function CountriesPage() {
   const EMPTY_SHIP = { countryId: '', minWeightMaritime: '', maxWeightMaritime: '', priceMaritimePerKg: '', minWeightAerien: '', maxWeightAerien: '', priceAerienPerKg: '' };
   const [shipForm, setShipForm] = useState(EMPTY_SHIP);
 
-  const { data: shippingRates = [], isLoading: loadingShip } = useQuery({
-    queryKey: ['shipping-rates'],
-    queryFn: async () => { const res = await shippingRatesApi.list(); return (res.data as any).data ?? []; },
+  const [pageShip, setPageShip] = useState(1);
+  const {
+    data: pageDataShip, isLoading: loadingShip, isError: echecShip,
+    error: erreurShip, refetch: refetchShip, isPlaceholderData: provShip,
+  } = useQuery({
+    queryKey: ['shipping-rates', { page: pageShip }],
+    queryFn: async () => {
+      const res = await shippingRatesApi.list({ page: pageShip, limit: TAILLE_PAGE });
+      return versPage(res.data.data, res.data.pagination);
+    },
+    placeholderData: keepPreviousData,
+  });
+  useRetourPageVide(pageDataShip, pageShip, setPageShip, provShip);
+  const shippingRates = pageDataShip?.items ?? [];
+  // Tous les tarifs (sans page) : nécessaires pour repérer les pays encore
+  // tarifés par l'ancienne grille (une seule page ne suffit pas).
+  const { data: tousShippingRates = [] } = useQuery({
+    queryKey: ['shipping-rates', 'tous'],
+    queryFn: async (): Promise<ShippingRate[]> => (await shippingRatesApi.list()).data.data ?? [],
+    enabled: tab === 'shipping',
   });
 
   const closeShipModal = () => { setShowShipModal(false); setEditRate(null); setShipForm(EMPTY_SHIP); setShipStep('maritime'); };
 
   const shipMut = useMutation({
-    mutationFn: (d: typeof shipForm) => {
+    mutationFn: async (d: typeof shipForm) => {
       const payload = {
         countryId: d.countryId,
-        minWeightMaritime: parseFloat(d.minWeightMaritime),
-        maxWeightMaritime: parseFloat(d.maxWeightMaritime),
-        priceMaritimePerKg: parseFloat(d.priceMaritimePerKg),
-        minWeightAerien: parseFloat(d.minWeightAerien),
-        maxWeightAerien: parseFloat(d.maxWeightAerien),
-        priceAerienPerKg: parseFloat(d.priceAerienPerKg),
+        minWeightMaritime: nombreSaisi(d.minWeightMaritime, 'Poids min. maritime'),
+        maxWeightMaritime: nombreSaisi(d.maxWeightMaritime, 'Poids max. maritime', { strict: true }),
+        priceMaritimePerKg: nombreSaisi(d.priceMaritimePerKg, 'Prix maritime / kg', { strict: true }),
+        minWeightAerien: nombreSaisi(d.minWeightAerien, 'Poids min. aérien'),
+        maxWeightAerien: nombreSaisi(d.maxWeightAerien, 'Poids max. aérien', { strict: true }),
+        priceAerienPerKg: nombreSaisi(d.priceAerienPerKg, 'Prix aérien / kg', { strict: true }),
       };
+      verifierTranche(payload.minWeightMaritime, payload.maxWeightMaritime, 'Maritime');
+      verifierTranche(payload.minWeightAerien, payload.maxWeightAerien, 'Aérien');
       return editRate ? shippingRatesApi.update(editRate.id, payload) : shippingRatesApi.create(payload);
     },
     onSuccess: () => {
@@ -152,7 +208,7 @@ export default function CountriesPage() {
     },
     onError: (e: any) => {
       logger.error('Erreur mutation tarif transport', { page: 'CountriesPage', message: e?.response?.data?.message ?? e?.message });
-      notifyError(e?.response?.data?.message ?? 'Erreur');
+      notifyError(e?.response?.data?.message ?? e?.message ?? 'Erreur');
     },
   });
 
@@ -187,14 +243,34 @@ export default function CountriesPage() {
 
   const closeSvcModal = () => { setShowSvcModal(false); setEditSvcRate(null); setSvcForm(EMPTY_SVC); setSvcStep('recuperation'); };
 
-  const { data: serviceRates = [], isLoading: loadingSvc } = useQuery({
-    queryKey: ['service-rates'],
-    queryFn: async () => { const res = await serviceRatesApi.list(); return (res.data as any).data ?? []; },
+  const [pageSvc, setPageSvc] = useState(1);
+  const {
+    data: pageDataSvc, isLoading: loadingSvc, isError: echecSvc,
+    error: erreurSvc, refetch: refetchSvc, isPlaceholderData: provSvc,
+  } = useQuery({
+    queryKey: ['service-rates', { page: pageSvc }],
+    queryFn: async () => {
+      const res = await serviceRatesApi.list({ page: pageSvc, limit: TAILLE_PAGE });
+      return versPage(res.data.data, res.data.pagination);
+    },
+    placeholderData: keepPreviousData,
+  });
+  useRetourPageVide(pageDataSvc, pageSvc, setPageSvc, provSvc);
+  const serviceRates = pageDataSvc?.items ?? [];
+  // Tous les tarifs (sans page) : pour repérer les pays en repli sur l'ancienne grille.
+  const { data: tousServiceRates = [] } = useQuery({
+    queryKey: ['service-rates', 'tous'],
+    queryFn: async (): Promise<ServiceRate[]> => (await serviceRatesApi.list()).data.data ?? [],
+    enabled: tab === 'service',
   });
 
   const svcMut = useMutation({
-    mutationFn: (d: typeof svcForm) => {
-      const payload = { countryId: d.countryId, prixRecuperation: parseFloat(d.prixRecuperation), prixLivraison: parseFloat(d.prixLivraison) };
+    mutationFn: async (d: typeof svcForm) => {
+      const payload = {
+        countryId: d.countryId,
+        prixRecuperation: nombreSaisi(d.prixRecuperation, 'Prix récupération'),
+        prixLivraison: nombreSaisi(d.prixLivraison, 'Prix livraison'),
+      };
       return editSvcRate ? serviceRatesApi.update(editSvcRate.id, payload) : serviceRatesApi.create(payload);
     },
     onSuccess: () => {
@@ -205,7 +281,7 @@ export default function CountriesPage() {
     },
     onError: (e: any) => {
       logger.error('Erreur mutation tarif service', { page: 'CountriesPage', message: e?.response?.data?.message ?? e?.message });
-      notifyError(e?.response?.data?.message ?? 'Erreur');
+      notifyError(e?.response?.data?.message ?? e?.message ?? 'Erreur');
     },
   });
 
@@ -225,15 +301,50 @@ export default function CountriesPage() {
   const [editTaux, setEditTaux] = useState<TauxChange | null>(null);
   const [tauxForm, setTauxForm] = useState({ valeur: '' });
 
-  const { data: tauxChanges = [], isLoading: loadingTaux } = useQuery({
-    queryKey: ['taux-change'],
-    queryFn: async () => { const res = await tauxChangeApi.list(); return (res.data as any).data ?? []; },
+  /* ── Anciennes grilles (shipping_prices / service_prices) ──
+     Le calcul du prix les utilise encore EN REPLI, pour un pays qui n'a pas de
+     ligne dans les nouvelles tables. Elles ne sont pas modifiables ici : on
+     signale les pays concernés pour que l'admin crée leur tarif. */
+  type AncienTarif = { countryId?: string; country?: { name?: string } };
+  const { data: anciensTransport = [] } = useQuery({
+    queryKey: ['shipping-prices-anciens'],
+    queryFn: async (): Promise<AncienTarif[]> => (await shippingPricesApi.list()).data.data ?? [],
+    staleTime: 5 * 60_000,
   });
+  const { data: anciensServices = [] } = useQuery({
+    queryKey: ['service-prices-anciens'],
+    queryFn: async (): Promise<AncienTarif[]> => (await servicePricesApi.list()).data.data ?? [],
+    staleTime: 5 * 60_000,
+  });
+  const paysEnRepli = (anciens: AncienTarif[], nouveaux: { countryId: string }[]) => {
+    const couverts = new Set(nouveaux.map((r) => r.countryId));
+    const noms = new Map<string, string>();
+    for (const a of anciens) {
+      if (a?.countryId && !couverts.has(a.countryId)) noms.set(a.countryId, a.country?.name ?? a.countryId);
+    }
+    return [...noms.values()].sort();
+  };
+  const repliTransport = paysEnRepli(anciensTransport, tousShippingRates);
+  const repliServices = paysEnRepli(anciensServices, tousServiceRates);
+
+  const [pageTaux, setPageTaux] = useState(1);
+  const {
+    data: pageDataTaux, isLoading: loadingTaux, isError: echecTaux,
+    error: erreurTaux, refetch: refetchTaux, isPlaceholderData: provTaux,
+  } = useQuery({
+    queryKey: ['taux-change', { page: pageTaux }],
+    queryFn: async () => {
+      const res = await tauxChangeApi.list({ page: pageTaux, limit: TAILLE_PAGE });
+      return versPage(res.data.data, res.data.pagination);
+    },
+    placeholderData: keepPreviousData,
+  });
+  const tauxChanges = pageDataTaux?.items ?? [];
 
   const closeTauxModal = () => { setShowTauxModal(false); setEditTaux(null); setTauxForm({ valeur: '' }); };
 
   const tauxMut = useMutation({
-    mutationFn: (d: typeof tauxForm) => tauxChangeApi.update(editTaux!.id, parseFloat(d.valeur)),
+    mutationFn: async (d: typeof tauxForm) => tauxChangeApi.update(editTaux!.id, nombreSaisi(d.valeur, 'Taux', { strict: true })),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['taux-change'] });
       logger.action('Taux de change mis à jour', { taux_id: editTaux?.id, valeur: tauxForm.valeur });
@@ -242,7 +353,7 @@ export default function CountriesPage() {
     },
     onError: (e: any) => {
       logger.error('Erreur mutation taux de change', { page: 'CountriesPage', message: e?.response?.data?.message ?? e?.message });
-      notifyError(e?.response?.data?.message ?? 'Erreur');
+      notifyError(e?.response?.data?.message ?? e?.message ?? 'Erreur');
     },
   });
 
@@ -312,16 +423,16 @@ export default function CountriesPage() {
               <Plus size={14} /> Ajouter
             </button>
           </div>
-          {loadingCountries ? <PageSpinner /> : (
+          {loadingCountries ? <PageSpinner /> : echecCountries ? <ErreurChargement erreur={erreurCountries} onRetry={() => refetchCountries()} /> : (<>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead><tr className="bg-gray-50/70 border-b border-gray-100">
                   <Th>Nom</Th><Th>Code</Th><Th>Statut</Th><Th>Actions</Th>
                 </tr></thead>
                 <tbody className="divide-y divide-gray-50">
-                  {countries.length === 0
+                  {countriesTable.length === 0
                     ? <EmptyState icon={Globe} text="Aucun pays enregistré" />
-                    : countries.map((c: Country) => (
+                    : countriesTable.map((c: Country) => (
                     <tr key={c.id} className="hover:bg-[#FFF9F5] transition-colors duration-150">
                       <td className="px-5 py-4 text-sm font-bold text-gray-900">{c.name}</td>
                       <td className="px-5 py-4">
@@ -339,7 +450,8 @@ export default function CountriesPage() {
                 </tbody>
               </table>
             </div>
-          )}
+            <Pagination pagination={pageDataCountries?.pagination} onChange={setPageCountries} chargement={provCountries} />
+          </>)}
         </div>
       )}
 
@@ -359,16 +471,25 @@ export default function CountriesPage() {
               <Plus size={14} /> Ajouter
             </button>
           </div>
-          {loadingShip ? <PageSpinner /> : (
+          {repliTransport.length > 0 && (
+            <div className="mx-6 mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+              <p className="font-bold">Pays encore facturés avec l'ancienne grille de transport</p>
+              <p className="mt-0.5">
+                {repliTransport.join(', ')} : aucun tarif ci-dessous, mais le prix est calculé avec l'ancienne grille (non modifiable ici).
+                Créez un tarif pour ces pays afin de le maîtriser.
+              </p>
+            </div>
+          )}
+          {loadingShip ? <PageSpinner /> : echecShip ? <ErreurChargement erreur={erreurShip} onRetry={() => refetchShip()} /> : (<>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead><tr className="bg-gray-50/70 border-b border-gray-100">
                   <Th>Pays</Th><Th>Aérien (poids)</Th><Th>Prix aérien / kg</Th><Th>Maritime (poids)</Th><Th>Prix maritime / kg</Th><Th>Actions</Th>
                 </tr></thead>
                 <tbody className="divide-y divide-gray-50">
-                  {(shippingRates as ShippingRate[]).length === 0
+                  {shippingRates.length === 0
                     ? <EmptyState icon={Plane} text="Aucun tarif de transport" />
-                    : (shippingRates as ShippingRate[]).map((r) => (
+                    : shippingRates.map((r) => (
                     <tr key={r.id} className="hover:bg-[#FFF9F5] transition-colors duration-150">
                       <td className="px-5 py-4 text-sm font-bold text-gray-900">{r.country?.name ?? r.countryId}</td>
                       <td className="px-5 py-4">
@@ -397,7 +518,8 @@ export default function CountriesPage() {
                 </tbody>
               </table>
             </div>
-          )}
+            <Pagination pagination={pageDataShip?.pagination} onChange={setPageShip} chargement={provShip} />
+          </>)}
         </div>
       )}
 
@@ -418,16 +540,25 @@ export default function CountriesPage() {
               <Plus size={14} /> Ajouter
             </button>
           </div>
-          {loadingSvc ? <PageSpinner /> : (
+          {repliServices.length > 0 && (
+            <div className="mx-6 mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+              <p className="font-bold">Pays encore facturés avec l'ancienne grille de services</p>
+              <p className="mt-0.5">
+                {repliServices.join(', ')} : aucun tarif ci-dessous, mais le prix est calculé avec l'ancienne grille (non modifiable ici).
+                Créez un tarif pour ces pays afin de le maîtriser.
+              </p>
+            </div>
+          )}
+          {loadingSvc ? <PageSpinner /> : echecSvc ? <ErreurChargement erreur={erreurSvc} onRetry={() => refetchSvc()} /> : (<>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead><tr className="bg-gray-50/70 border-b border-gray-100">
                   <Th>Pays</Th><Th>Prix récupération</Th><Th>Prix livraison</Th><Th>Actions</Th>
                 </tr></thead>
                 <tbody className="divide-y divide-gray-50">
-                  {(serviceRates as ServiceRate[]).length === 0
+                  {serviceRates.length === 0
                     ? <EmptyState icon={Wrench} text="Aucun tarif de service" />
-                    : (serviceRates as ServiceRate[]).map((r) => (
+                    : serviceRates.map((r) => (
                     <tr key={r.id} className="hover:bg-[#FFF9F5] transition-colors duration-150">
                       <td className="px-5 py-4 text-sm font-bold text-gray-900">{r.country?.name ?? r.countryId}</td>
                       <td className="px-5 py-4">
@@ -451,7 +582,8 @@ export default function CountriesPage() {
                 </tbody>
               </table>
             </div>
-          )}
+            <Pagination pagination={pageDataSvc?.pagination} onChange={setPageSvc} chargement={provSvc} />
+          </>)}
         </div>
       )}
 
@@ -464,19 +596,19 @@ export default function CountriesPage() {
                 <Coins size={14} className="text-emerald-600" />
               </div>
               <h2 className="font-bold text-gray-900">Taux de change</h2>
-              <span className="text-xs text-gray-400 font-medium">— utilisé pour l'affichage FCFA dans le mobile</span>
+              <span className="text-xs text-gray-400 font-medium">— fixe le montant débité en FCFA chez Wave / Orange Money (prix en € × taux)</span>
             </div>
           </div>
-          {loadingTaux ? <PageSpinner /> : (
+          {loadingTaux ? <PageSpinner /> : echecTaux ? <ErreurChargement erreur={erreurTaux} onRetry={() => refetchTaux()} /> : (<>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead><tr className="bg-gray-50/70 border-b border-gray-100">
                   <Th>Devise source</Th><Th>Devise cible</Th><Th>Taux</Th><Th>Actions</Th>
                 </tr></thead>
                 <tbody className="divide-y divide-gray-50">
-                  {(tauxChanges as TauxChange[]).length === 0
+                  {tauxChanges.length === 0
                     ? <EmptyState icon={Coins} text="Aucun taux de change configuré" />
-                    : (tauxChanges as TauxChange[]).map((t) => (
+                    : tauxChanges.map((t) => (
                     <tr key={t.id} className="hover:bg-[#FFF9F5] transition-colors duration-150">
                       <td className="px-5 py-4 text-sm font-bold text-gray-900">{t.devise_source}</td>
                       <td className="px-5 py-4 text-sm font-bold text-gray-900">{t.devise_cible}</td>
@@ -499,7 +631,8 @@ export default function CountriesPage() {
                 </tbody>
               </table>
             </div>
-          )}
+            <Pagination pagination={pageDataTaux?.pagination} onChange={setPageTaux} chargement={provTaux} />
+          </>)}
         </div>
       )}
 

@@ -3,7 +3,7 @@ import type { LoginPayload, User } from '@/types';
 
 export const authApi = {
   login: (payload: LoginPayload) =>
-    api.post<{ token: string; utilisateur: User }>('/auth/login', payload),
+    api.post<{ token: string; refreshToken: string; utilisateur: User }>('/auth/login', payload),
 
   logout: (refreshToken: string) =>
     api.post('/auth/logout', { refreshToken }),
@@ -18,7 +18,7 @@ export const authApi = {
   // Le middleware de validation retire les clés inconnues : envoyer
   // ancienMotDePasse/nouveauMotDePasse produisait un 400 « Données invalides ».
   changePassword: (data: { ancienMotDePasse: string; nouveauMotDePasse: string }) =>
-    api.put('/account/change-password', {
+    api.put<{ message: string; token: string; refreshToken: string }>('/account/change-password', {
       oldPassword: data.ancienMotDePasse,
       newPassword: data.nouveauMotDePasse,
     }),

@@ -1,13 +1,17 @@
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
   UserPlus, Search, CheckCircle, XCircle, Shield,
   UserCog, Eye, EyeOff, Loader2, Mail, Phone, MapPin, Lock, User,
 } from 'lucide-react';
 import { adminsApi } from '@/api/admins';
+import { TAILLE_PAGE, versPage } from '@/api/pagination';
+import { useDebounce, useRetourPageVide } from '@/hooks/usePagination';
+import { Pagination } from '@/components/ui/Pagination';
 import logger from '@/lib/logger';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
+import { ErreurChargement } from '@/components/ui/ErreurChargement';
 import { PageSpinner } from '@/components/ui/Spinner';
 import { notifySuccess, notifyError } from '@/utils/notify';
 import { formatDate } from '@/utils/format';
@@ -59,27 +63,32 @@ function Field({
 export default function AdminsPage() {
   const qc = useQueryClient();
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const q = useDebounce(search.trim(), 400);
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState<FormData>(EMPTY);
   const [showPwd, setShowPwd] = useState(false);
 
-  const { data: admins = [], isLoading } = useQuery({
-    queryKey: ['admins'],
+  // Recherche (nom, prénom, e-mail, téléphone) faite côté serveur via `q`.
+  const { data, isLoading, isError, error: erreurChargement, refetch, isPlaceholderData } = useQuery({
+    queryKey: ['admins', { page, q }],
     queryFn: async () => {
-      const res = await adminsApi.list();
-      return (res.data as any).data ?? (res.data as any).admins ?? [];
+      const res = await adminsApi.list({ page, limit: TAILLE_PAGE, q });
+      return versPage(res.data.data, res.data.pagination);
     },
+    placeholderData: keepPreviousData,
   });
+  useRetourPageVide(data, page, setPage, isPlaceholderData);
 
-  const filtered = admins.filter((a: UserType) =>
-    search === '' ||
-    `${a.nom} ${a.prenom} ${a.email}`.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = data?.items ?? [];
+  const total = data?.pagination.total ?? 0;
+  const changerRecherche = (texte: string) => { setSearch(texte); setPage(1); };
 
   const createMut = useMutation({
     mutationFn: adminsApi.create,
     onSuccess: (_, vars: any) => {
       qc.invalidateQueries({ queryKey: ['admins'] });
+      qc.invalidateQueries({ queryKey: ['admins-list'] });
       qc.invalidateQueries({ queryKey: ['kpi-admins'] });
       logger.action('Administrateur créé', { email: logger.maskEmail(vars?.email ?? '') });
       notifySuccess('Administrateur créé avec succès');
@@ -132,7 +141,7 @@ export default function AdminsPage() {
         <div>
           <h1 className="text-2xl font-extrabold text-gray-900 tracking-tight">Administrateurs</h1>
           <p className="text-gray-400 text-sm mt-0.5">
-            {admins.length} administrateur{admins.length > 1 ? 's' : ''} enregistré{admins.length > 1 ? 's' : ''}
+            {total} administrateur{total > 1 ? 's' : ''} {q ? 'trouvé' : 'enregistré'}{total > 1 ? 's' : ''}
           </p>
         </div>
         <button
@@ -154,13 +163,13 @@ export default function AdminsPage() {
           </div>
           <input
             className="flex-1 text-sm font-medium outline-none placeholder-gray-400 bg-transparent text-gray-900"
-            placeholder="Rechercher par nom, email..."
+            placeholder="Rechercher par nom, email, téléphone..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => changerRecherche(e.target.value)}
           />
           {search && (
             <button
-              onClick={() => setSearch('')}
+              onClick={() => changerRecherche('')}
               className="text-xs text-gray-400 hover:text-gray-600 font-medium transition-colors"
             >
               Effacer
@@ -168,7 +177,7 @@ export default function AdminsPage() {
           )}
         </div>
 
-        {isLoading ? <PageSpinner /> : (
+        {isLoading ? <PageSpinner /> : isError ? <ErreurChargement erreur={erreurChargement} onRetry={() => refetch()} /> : (<>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -233,7 +242,8 @@ export default function AdminsPage() {
               </tbody>
             </table>
           </div>
-        )}
+          <Pagination pagination={data?.pagination} onChange={setPage} chargement={isPlaceholderData} />
+        </>)}
       </div>
 
       {/* ── Modal Créer admin ── */}

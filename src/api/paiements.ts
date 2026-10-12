@@ -1,4 +1,6 @@
 import { api } from './axios';
+import { nettoyerParams } from './pagination';
+import type { Pagination, ParamsListe } from '@/types';
 
 export type StatutPaiement = 'en_attente' | 'en_cours' | 'paye' | 'echoue' | 'rembourse';
 
@@ -42,7 +44,9 @@ export interface PaiementStats {
 }
 
 export const paiementsApi = {
-  list:        () => api.get<{ success: boolean; data: Paiement[] }>('/admin/paiements'),
+  /** `q` : référence colis, destination, payeur, référence opérateur. `statut` invalide → 400. */
+  list:        (params?: ParamsListe & { statut?: StatutPaiement }) =>
+    api.get<{ success: boolean; data: Paiement[]; pagination?: Pagination }>('/admin/paiements', { params: nettoyerParams(params) }),
   stats:       () => api.get<{ success: boolean; data: PaiementStats }>('/admin/paiements/stats'),
   changerStatut: (id: string, statut: StatutPaiement) =>
     api.put(`/admin/paiements/${id}/statut`, { statut }),

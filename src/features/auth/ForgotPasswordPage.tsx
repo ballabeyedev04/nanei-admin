@@ -23,9 +23,19 @@ export default function ForgotPasswordPage() {
     try {
       await authApi.adminForgotPassword(email.trim());
       setSent(true);
-    } catch {
-      // On affiche un message générique pour ne pas révéler d'informations
-      setSent(true);
+    } catch (err) {
+      const reponse = (err as { response?: { status?: number; data?: { message?: string } } }).response;
+      // Le back répond déjà de façon neutre (même message que le compte
+      // existe ou non) : une erreur ici est un vrai échec (limite atteinte,
+      // serveur, réseau). Avant, on affichait « email envoyé » quand même.
+      const status = reponse?.status;
+      if (status === 429) {
+        setError('Trop de demandes. Réessayez dans 15 minutes.');
+      } else if (status && status < 500) {
+        setError(reponse?.data?.message ?? "Demande refusée. Vérifiez l'adresse saisie.");
+      } else {
+        setError('Le serveur est injoignable. Réessayez dans quelques instants.');
+      }
     } finally {
       setLoading(false);
     }

@@ -1,7 +1,11 @@
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { AlertTriangle, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { reclamationsApi } from '@/api/reclamations';
+import { TAILLE_PAGE } from '@/api/pagination';
+import { useRetourPageVide } from '@/hooks/usePagination';
+import { Pagination } from '@/components/ui/Pagination';
+import { ErreurChargement } from '@/components/ui/ErreurChargement';
 import { PageSpinner } from '@/components/ui/Spinner';
 import logger from '@/lib/logger';
 import { formatDate } from '@/utils/format';
@@ -18,7 +22,7 @@ const STATUT_CONFIG: Record<StatutReclamation, { label: string; color: string; b
 
 const TYPE_LABELS: Record<TypeReclamation, string> = {
   perdu:      'Colis perdu',
-  endommage:  'Colis endommagé',
+  'endommagé': 'Colis endommagé', // valeur du back, AVEC accent
   retard:     'Retard de livraison',
   autre:      'Autre',
 };
@@ -33,7 +37,7 @@ const FILTER_OPTIONS: { value: StatutReclamation | 'tous'; label: string }[] = [
 
 /* ── Badge statut ──────────────────────────────────────────────────── */
 function StatutBadge({ statut }: { statut: StatutReclamation }) {
-  const cfg = STATUT_CONFIG[statut];
+  const cfg = STATUT_CONFIG[statut] ?? { label: statut, color: 'text-gray-600', bg: 'bg-gray-100', border: 'border-gray-200' };
   return (
     <span className={`inline-flex items-center px-2.5 py-1 rounded-xl text-xs font-bold border ${cfg.bg} ${cfg.color} ${cfg.border}`}>
       {cfg.label}
@@ -112,7 +116,9 @@ function ReclamationModal({
   const [commentaire, setCommentaire] = useState('');
 
   const mut = useMutation({
-    mutationFn: () => reclamationsApi.update(reclamation.id, newStatut, commentaire || undefined),
+    // Envoyé au back sous le nom commentaire_admin (voir api/reclamations.ts) :
+    // enregistré et transmis au client par e-mail et SMS.
+    mutationFn: () => reclamationsApi.update(reclamation.id, newStatut, commentaire.trim() || undefined),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['reclamations'] });
       logger.action('Réclamation mise à jour', { reclamation_id: reclamation.id, nouveau_statut: newStatut });
@@ -139,7 +145,7 @@ function ReclamationModal({
             </div>
             <div>
               <h2 className="font-bold text-gray-900 text-base">Réclamation #{reclamation.id.slice(-6).toUpperCase()}</h2>
-              <p className="text-xs text-gray-400">{TYPE_LABELS[reclamation.type]}</p>
+              <p className="text-xs text-gray-400">{TYPE_LABELS[reclamation.type] ?? reclamation.type}</p>
             </div>
           </div>
           <button onClick={onClose} className="w-8 h-8 rounded-xl bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors">
@@ -156,8 +162,9 @@ function ReclamationModal({
             </div>
             <div>
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-1">Client</p>
-              <p className="text-sm font-bold text-gray-900">{reclamation.client.prenom} {reclamation.client.nom}</p>
+              <p className="text-sm font-bold text-gray-900">{`${reclamation.client.prenom} ${reclamation.client.nom}`.trim() || '—'}</p>
               <p className="text-xs text-gray-400">{reclamation.client.email}</p>
+              {reclamation.client.telephone && <p className="text-xs text-gray-400">{reclamation.client.telephone}</p>}
             </div>
             <div>
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-1">Statut actuel</p>
@@ -178,28 +185,17 @@ function ReclamationModal({
           {/* Photos */}
           <div>
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-2">Photos</p>
-            <PhotoGallery photos={reclamation.photos ?? []} />
+            <PhotoGallery photos={reclamation.photos} />
           </div>
 
-          {/* Historique */}
-          {reclamation.historique && reclamation.historique.length > 0 && (
+          {/* Dernier commentaire envoyé au client (commentaire_admin) */}
+          {reclamation.commentaireAdmin && (
             <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">Historique</p>
-              <div className="space-y-2">
-                {reclamation.historique.map((h, i) => (
-                  <div key={i} className="flex gap-3 items-start">
-                    <div className="w-2 h-2 rounded-full bg-[#FF7A00] mt-1.5 flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <StatutBadge statut={h.statut} />
-                        {h.admin && <span className="text-xs text-gray-400">par {h.admin}</span>}
-                        <span className="text-xs text-gray-400 ml-auto">{formatDate(h.date)}</span>
-                      </div>
-                      {h.commentaire && <p className="text-xs text-gray-600 mt-1">{h.commentaire}</p>}
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-2">Dernier message envoyé au client</p>
+              <p className="text-sm text-gray-700 bg-orange-50 border border-orange-100 rounded-xl p-4 leading-relaxed whitespace-pre-wrap">{reclamation.commentaireAdmin}</p>
+              {reclamation.updatedAt && (
+                <p className="text-xs text-gray-400 mt-1">Mis à jour le {formatDate(reclamation.updatedAt)}</p>
+              )}
             </div>
           )}
 
@@ -218,7 +214,7 @@ function ReclamationModal({
             <textarea
               value={commentaire}
               onChange={(e) => setCommentaire(e.target.value)}
-              placeholder="Commentaire admin (optionnel)"
+              placeholder="Message au client (optionnel) — envoyé par e-mail et SMS"
               rows={3}
               className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#FF7A00] focus:ring-2 focus:ring-[#FF7A00]/10 resize-none transition-all placeholder-gray-400"
             />
@@ -248,14 +244,20 @@ function ReclamationModal({
 export default function ReclamationsPage() {
   const [filterStatut, setFilterStatut] = useState<StatutReclamation | 'tous'>('tous');
   const [selected, setSelected] = useState<Reclamation | null>(null);
+  const [page, setPage] = useState(1);
+  const changerStatut = (s: StatutReclamation | 'tous') => { setFilterStatut(s); setPage(1); };
 
-  const { data: reclamations = [], isLoading } = useQuery({
-    queryKey: ['reclamations', filterStatut],
-    queryFn: async () => {
-      const res = await reclamationsApi.list(filterStatut !== 'tous' ? filterStatut : undefined);
-      return (res.data as any).data ?? (res.data as any).reclamations ?? [];
-    },
+  // Filtre `statut` côté serveur.
+  const { data, isLoading, isError, error: erreurChargement, refetch, isPlaceholderData } = useQuery({
+    queryKey: ['reclamations', { page, statut: filterStatut }],
+    // reclamationsApi convertit la réponse du back (utilisateur, colis.reference).
+    queryFn: () =>
+      reclamationsApi.list({ page, limit: TAILLE_PAGE, statut: filterStatut !== 'tous' ? filterStatut : undefined }),
+    placeholderData: keepPreviousData,
   });
+  useRetourPageVide(data, page, setPage, isPlaceholderData);
+  const reclamations = data?.items ?? [];
+  const total = data?.pagination.total ?? 0;
 
   return (
     <div className="space-y-7">
@@ -263,7 +265,7 @@ export default function ReclamationsPage() {
       <div>
         <h1 className="text-2xl font-extrabold text-gray-900 tracking-tight">Réclamations</h1>
         <p className="text-gray-400 text-sm mt-0.5">
-          {reclamations.length} réclamation{reclamations.length > 1 ? 's' : ''}
+          {total} réclamation{total > 1 ? 's' : ''}
         </p>
       </div>
 
@@ -272,7 +274,7 @@ export default function ReclamationsPage() {
         {FILTER_OPTIONS.map(({ value, label }) => (
           <button
             key={value}
-            onClick={() => setFilterStatut(value)}
+            onClick={() => changerStatut(value)}
             className={`px-4 py-2 rounded-xl text-sm font-bold border transition-all duration-150 active:scale-95 ${
               filterStatut === value
                 ? 'bg-[#FF7A00] text-white border-[#FF7A00] shadow-lg shadow-[#FF7A00]/25'
@@ -286,7 +288,7 @@ export default function ReclamationsPage() {
 
       {/* Tableau */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-[0_2px_12px_0_rgba(0,0,0,0.05)] overflow-hidden">
-        {isLoading ? <PageSpinner /> : (
+        {isLoading ? <PageSpinner /> : isError ? <ErreurChargement erreur={erreurChargement} onRetry={() => refetch()} /> : (<>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -318,10 +320,10 @@ export default function ReclamationsPage() {
                       <span className="text-sm font-bold text-[#FF7A00]">{r.colisReference}</span>
                     </td>
                     <td className="px-5 py-4">
-                      <p className="text-sm font-semibold text-gray-900">{r.client.prenom} {r.client.nom}</p>
+                      <p className="text-sm font-semibold text-gray-900">{`${r.client.prenom} ${r.client.nom}`.trim() || '—'}</p>
                       <p className="text-xs text-gray-400">{r.client.email}</p>
                     </td>
-                    <td className="px-5 py-4 text-sm text-gray-600">{TYPE_LABELS[r.type]}</td>
+                    <td className="px-5 py-4 text-sm text-gray-600">{TYPE_LABELS[r.type] ?? r.type}</td>
                     <td className="px-5 py-4"><StatutBadge statut={r.statut} /></td>
                     <td className="px-5 py-4 text-sm text-gray-400 whitespace-nowrap">{formatDate(r.createdAt)}</td>
                     <td className="px-5 py-4">
@@ -332,7 +334,8 @@ export default function ReclamationsPage() {
               </tbody>
             </table>
           </div>
-        )}
+          <Pagination pagination={data?.pagination} onChange={setPage} chargement={isPlaceholderData} />
+        </>)}
       </div>
 
       {selected && <ReclamationModal reclamation={selected} onClose={() => setSelected(null)} />}

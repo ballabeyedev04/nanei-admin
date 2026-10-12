@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Download, Package, CreditCard } from 'lucide-react';
 import { exportApi } from '@/api/export';
-import { downloadBlob } from '@/utils/download';
+import { downloadBlob, messageErreurTelechargement } from '@/utils/download';
 import { notifyError } from '@/utils/notify';
 import logger from '@/lib/logger';
 
@@ -81,7 +81,7 @@ export default function ExportPage() {
       downloadBlob(res.data as Blob, `colis-export.${ext}`);
     } catch (err: any) {
       logger.error('Erreur export colis', { page: 'ExportPage', format, message: (err as Error).message });
-      notifyError('Erreur lors de l\'export des colis');
+      notifyError(await messageErreurTelechargement(err, "Erreur lors de l'export des colis"));
     } finally {
       setLoadingColis(null);
     }
@@ -99,7 +99,7 @@ export default function ExportPage() {
       downloadBlob(res.data as Blob, `paiements-export.${ext}`);
     } catch (err: any) {
       logger.error('Erreur export paiements', { page: 'ExportPage', format, message: (err as Error).message });
-      notifyError('Erreur lors de l\'export des paiements');
+      notifyError(await messageErreurTelechargement(err, "Erreur lors de l'export des paiements"));
     } finally {
       setLoadingPaiements(null);
     }

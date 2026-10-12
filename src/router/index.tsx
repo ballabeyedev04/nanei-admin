@@ -83,9 +83,13 @@ export const router = createBrowserRouter([
     children: [
       { path: PATHS.LOGIN,           element: <LoginPage /> },
       { path: PATHS.FORGOT_PASSWORD, element: <ForgotPasswordPage /> },
-      { path: PATHS.RESET_PASSWORD,  element: <ResetPasswordPage /> },
     ],
   },
+
+  // Réinitialisation du mot de passe : accessible MÊME si une session admin
+  // est ouverte dans ce navigateur (le lien reçu par e-mail ne doit pas
+  // rediriger vers le tableau de bord).
+  { path: PATHS.RESET_PASSWORD, element: <ResetPasswordPage /> },
 
   // App admin — accessible uniquement si connecté ET Admin
   {

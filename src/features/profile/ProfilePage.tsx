@@ -50,8 +50,12 @@ export default function ProfilePage() {
       setShowProfileModal(false);
     },
     onError: (e: any) => {
-      logger.error('Erreur mise à jour profil', { page: 'ProfilePage', message: e?.response?.data?.message ?? e?.message });
-      notifyError(e?.response?.data?.message ?? 'Erreur mise à jour');
+      // 400 Joi : `details` contient la raison précise (ex. téléphone invalide).
+      const data = e?.response?.data;
+      const details: string[] | undefined = Array.isArray(data?.details) ? data.details : undefined;
+      const msg = details?.length ? details.join(' • ') : (data?.message ?? e?.message ?? 'Erreur mise à jour');
+      logger.error('Erreur mise à jour profil', { page: 'ProfilePage', message: msg });
+      notifyError(msg);
     },
   });
 
@@ -64,7 +68,11 @@ export default function ProfilePage() {
 
   const pwMut = useMutation({
     mutationFn: authApi.changePassword,
-    onSuccess: () => {
+    onSuccess: (res) => {
+      // Le back coupe toutes les autres sessions et renvoie de nouveaux
+      // jetons pour celle-ci : sans eux, l'admin serait déconnecté.
+      const { token, refreshToken } = (res.data ?? {}) as { token?: string; refreshToken?: string };
+      if (token && refreshToken) useAuthStore.getState().setTokens(token, refreshToken);
       logger.action('Mot de passe admin changé', { admin_id: user?.id });
       notifySuccess('Mot de passe modifié');
       closePwModal();

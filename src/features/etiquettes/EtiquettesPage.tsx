@@ -1,36 +1,44 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { Search, Tag, Download, Printer, FileCode2, ExternalLink, Copy, Check } from 'lucide-react';
 import { colisApi } from '@/api/colis';
 import { etiquettesApi } from '@/api/etiquettes';
+import { TAILLE_PAGE, versPage } from '@/api/pagination';
+import { useDebounce, useRetourPageVide } from '@/hooks/usePagination';
+import { Pagination } from '@/components/ui/Pagination';
 import logger from '@/lib/logger';
+import { ErreurChargement } from '@/components/ui/ErreurChargement';
 import { PageSpinner } from '@/components/ui/Spinner';
 import { Modal } from '@/components/ui/Modal';
 import { formatDate } from '@/utils/format';
-import { downloadBlob } from '@/utils/download';
+import { downloadBlob, messageErreurTelechargement } from '@/utils/download';
 import { notifyError, notifySuccess } from '@/utils/notify';
 import type { Colis } from '@/types';
 
 export default function EtiquettesPage() {
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const q = useDebounce(search.trim(), 400);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadingZplId, setDownloadingZplId] = useState<string | null>(null);
   const [zplModal, setZplModal] = useState<{ reference: string; content: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const { data: colis = [], isLoading } = useQuery({
-    queryKey: ['colis', 'all'],
+  // Même clé que l'onglet « Tous » de ColisPage : cache partagé, invalidé par ['colis'].
+  // Recherche (référence ou destination) faite côté serveur via `q`.
+  const { data, isLoading, isError, error: erreurChargement, refetch, isPlaceholderData } = useQuery({
+    queryKey: ['colis', 'all', { page, q }],
     queryFn: async () => {
-      const res = await colisApi.list();
-      return (res.data as any).colis ?? (res.data as any).data ?? [];
+      const res = await colisApi.list({ page, limit: TAILLE_PAGE, q });
+      return versPage(res.data.colis, res.data.pagination);
     },
+    placeholderData: keepPreviousData,
   });
+  useRetourPageVide(data, page, setPage, isPlaceholderData);
 
-  const filtered = colis.filter((c: Colis) =>
-    search === '' ||
-    c.reference.toLowerCase().includes(search.toLowerCase()) ||
-    c.destination.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = data?.items ?? [];
+  const total = data?.pagination.total ?? 0;
+  const changerRecherche = (texte: string) => { setSearch(texte); setPage(1); };
 
   const handleDownload = async (c: Colis) => {
     setDownloadingId(c.id);
@@ -40,7 +48,7 @@ export default function EtiquettesPage() {
       logger.action('Étiquette téléchargée', { colis_id: c.id, reference: c.reference });
     } catch (err: any) {
       logger.error('Erreur téléchargement étiquette', { page: 'EtiquettesPage', colis_id: c.id, message: err?.message });
-      notifyError('Impossible de télécharger l\'étiquette');
+      notifyError(await messageErreurTelechargement(err, "Impossible de télécharger l'étiquette"));
     } finally {
       setDownloadingId(null);
     }
@@ -57,7 +65,7 @@ export default function EtiquettesPage() {
       setZplModal({ reference: c.reference, content });
     } catch (err: any) {
       logger.error('Erreur téléchargement étiquette ZPL', { page: 'EtiquettesPage', colis_id: c.id, message: err?.message });
-      notifyError('Impossible de télécharger le fichier ZPL');
+      notifyError(await messageErreurTelechargement(err, 'Impossible de télécharger le fichier ZPL'));
     } finally {
       setDownloadingZplId(null);
     }
@@ -78,7 +86,7 @@ export default function EtiquettesPage() {
       <div>
         <h1 className="text-2xl font-extrabold text-gray-900 tracking-tight">Étiquettes</h1>
         <p className="text-gray-400 text-sm mt-0.5">
-          {colis.length} colis · téléchargez l'étiquette d'expédition de n'importe quel colis
+          {total} colis · téléchargez l'étiquette d'expédition de n'importe quel colis
         </p>
       </div>
 
@@ -94,16 +102,16 @@ export default function EtiquettesPage() {
             className="flex-1 text-sm font-medium outline-none placeholder-gray-400 bg-transparent text-gray-900"
             placeholder="Rechercher par référence ou destination..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => changerRecherche(e.target.value)}
           />
           {search && (
-            <button onClick={() => setSearch('')} className="text-xs text-gray-400 hover:text-gray-600 font-medium transition-colors">
+            <button onClick={() => changerRecherche('')} className="text-xs text-gray-400 hover:text-gray-600 font-medium transition-colors">
               Effacer
             </button>
           )}
         </div>
 
-        {isLoading ? <PageSpinner /> : (
+        {isLoading ? <PageSpinner /> : isError ? <ErreurChargement erreur={erreurChargement} onRetry={() => refetch()} /> : (<>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -173,7 +181,8 @@ export default function EtiquettesPage() {
               </tbody>
             </table>
           </div>
-        )}
+          <Pagination pagination={data?.pagination} onChange={setPage} chargement={isPlaceholderData} />
+        </>)}
       </div>
 
       {/* ══ MODAL : explication fichier ZPL ══════════════════════════ */}

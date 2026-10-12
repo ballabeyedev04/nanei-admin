@@ -1,11 +1,16 @@
 import { useState, useRef, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { createPortal } from 'react-dom';
 import { Search, CreditCard, CheckCircle, Clock, RefreshCcw, TrendingUp, AlertCircle, Hourglass } from 'lucide-react';
 import { paiementsApi, type Paiement, type StatutPaiement } from '@/api/paiements';
+import { tauxChangeApi, type TauxChange } from '@/api/countries';
+import { TAILLE_PAGE, versPage } from '@/api/pagination';
+import { useDebounce, useRetourPageVide } from '@/hooks/usePagination';
+import { Pagination } from '@/components/ui/Pagination';
 import logger from '@/lib/logger';
+import { ErreurChargement } from '@/components/ui/ErreurChargement';
 import { PageSpinner } from '@/components/ui/Spinner';
-import { formatDate } from '@/utils/format';
+import { formatDate, formatPrice } from '@/utils/format';
 import { confirmAction } from '@/utils/confirm';
 import { notifySuccess, notifyError } from '@/utils/notify';
 
@@ -23,8 +28,25 @@ const MOYENS: Record<string, { label: string; color: string }> = {
   orange_money: { label: 'Orange Money', color: 'text-orange-600' },
 };
 
+// Les montants du back (prixTotal, montantPaye, montantTotal) sont en EUROS :
+// c'est le prix du colis. Le montant débité chez Wave / Orange Money est en
+// FCFA = prix × taux de change ; on l'affiche à titre indicatif.
+const TAUX_PAR_DEFAUT = 655.957;
+
 function formatXOF(n: number) {
-  return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'XOF', maximumFractionDigits: 0 }).format(n);
+  return new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 }).format(Math.round(n)) + ' FCFA';
+}
+
+/** Montant en euros, avec l'équivalent FCFA au taux actuel en dessous. */
+function Montant({ eur, taux, className = '' }: { eur: number; taux: number; className?: string }) {
+  return (
+    <span className="inline-flex flex-col">
+      <span className={className}>{formatPrice(eur)}</span>
+      <span className="text-[11px] font-medium text-gray-400" title="Équivalent au taux de change actuel">
+        ≈ {formatXOF(eur * taux)}
+      </span>
+    </span>
+  );
 }
 
 /* ── Dropdown statut ────────────────────────────────────────────── */
@@ -118,26 +140,47 @@ function StatutSelector({ paiement }: { paiement: Paiement }) {
 export default function PaiementsPage() {
   const [search, setSearch]           = useState('');
   const [filterStatut, setFilterStatut] = useState<StatutPaiement | 'tous'>('tous');
+  const [page, setPage] = useState(1);
+  const q = useDebounce(search.trim(), 400);
 
-  const { data: paiements = [], isLoading } = useQuery({
-    queryKey: ['paiements'],
-    queryFn: async () => { const r = await paiementsApi.list(); return r.data.data ?? []; },
+  // Filtre `statut` et recherche `q` (référence colis, destination, payeur,
+  // référence opérateur) faits côté serveur.
+  const { data, isLoading, isError, error: erreurChargement, refetch, isPlaceholderData } = useQuery({
+    queryKey: ['paiements', { page, q, statut: filterStatut }],
+    queryFn: async () => {
+      const r = await paiementsApi.list({
+        page,
+        limit: TAILLE_PAGE,
+        q,
+        statut: filterStatut === 'tous' ? undefined : filterStatut,
+      });
+      return versPage(r.data.data, r.data.pagination);
+    },
+    placeholderData: keepPreviousData,
   });
+  useRetourPageVide(data, page, setPage, isPlaceholderData);
+  const changerRecherche = (texte: string) => { setSearch(texte); setPage(1); };
+  const changerStatut = (s: StatutPaiement | 'tous') => { setFilterStatut(s); setPage(1); };
 
   const { data: stats } = useQuery({
     queryKey: ['paiements-stats'],
     queryFn: async () => { const r = await paiementsApi.stats(); return r.data.data; },
   });
 
-  const filtered = paiements.filter((p: Paiement) => {
-    const q = search.toLowerCase();
-    const matchSearch = !q ||
-      (p.colis?.reference ?? '').toLowerCase().includes(q) ||
-      `${p.payeur?.prenom} ${p.payeur?.nom}`.toLowerCase().includes(q) ||
-      (p.colis?.destination ?? '').toLowerCase().includes(q);
-    const matchStatut = filterStatut === 'tous' || p.statut === filterStatut;
-    return matchSearch && matchStatut;
+  // Taux EUR -> FCFA (le même que celui utilisé pour débiter chez l'opérateur)
+  const { data: taux = TAUX_PAR_DEFAUT } = useQuery({
+    queryKey: ['taux-change', 'eur-fcfa'], // clé distincte : CountriesPage met la LISTE sous ['taux-change']
+    queryFn: async () => {
+      const res = await tauxChangeApi.list();
+      const liste: TauxChange[] = res.data.data ?? [];
+      const eurFcfa = liste.find((t) => t.devise_source === 'EUR' && t.devise_cible === 'FCFA') ?? liste[0];
+      const valeur = Number(eurFcfa?.valeur);
+      return valeur > 0 ? valeur : TAUX_PAR_DEFAUT;
+    },
+    staleTime: 5 * 60_000,
   });
+
+  const filtered = data?.items ?? [];
 
   return (
     <div className="space-y-6">
@@ -156,7 +199,8 @@ export default function PaiementsPage() {
         <KpiCard icon={Clock}       color="bg-amber-50"   iconColor="text-amber-600"
           label="En attente"         value={(stats?.enAttente ?? 0) + (stats?.enCours ?? 0)} />
         <KpiCard icon={TrendingUp}  color="bg-violet-50"  iconColor="text-violet-600"
-          label="Montant encaissé"   value={formatXOF(stats?.montantTotal ?? 0)} isAmount />
+          label="Montant encaissé"   value={formatPrice(Number(stats?.montantTotal) || 0)} isAmount
+          sousTitre={`≈ ${formatXOF((Number(stats?.montantTotal) || 0) * taux)}`} />
       </div>
 
       {/* Tableau */}
@@ -167,11 +211,11 @@ export default function PaiementsPage() {
               <CreditCard size={14} className="text-[#FF7A00]" />
             </div>
             <h2 className="font-bold text-gray-900">Historique des paiements</h2>
-            <span className="text-xs font-semibold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{filtered.length}</span>
+            <span className="text-xs font-semibold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{data?.pagination.total ?? 0}</span>
           </div>
           <div className="flex gap-2 flex-wrap">
             {(['tous', ...Object.keys(STATUTS)] as (StatutPaiement | 'tous')[]).map((s) => (
-              <button key={s} onClick={() => setFilterStatut(s)}
+              <button key={s} onClick={() => changerStatut(s)}
                 className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
                   filterStatut === s
                     ? s === 'tous'
@@ -187,13 +231,13 @@ export default function PaiementsPage() {
               <input
                 className="pl-8 pr-3 py-1.5 text-xs font-medium border border-gray-200 rounded-xl outline-none focus:border-[#FF7A00] focus:ring-2 focus:ring-[#FF7A00]/10 w-48 transition-all"
                 placeholder="Référence, client…"
-                value={search} onChange={(e) => setSearch(e.target.value)}
+                value={search} onChange={(e) => changerRecherche(e.target.value)}
               />
             </div>
           </div>
         </div>
 
-        {isLoading ? <PageSpinner /> : (
+        {isLoading ? <PageSpinner /> : isError ? <ErreurChargement erreur={erreurChargement} onRetry={() => refetch()} /> : (<>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -229,11 +273,11 @@ export default function PaiementsPage() {
                       <td className="px-5 py-4 text-sm font-semibold text-gray-700">{p.colis?.destination ?? '—'}</td>
                       <td className="px-5 py-4 text-sm font-semibold text-gray-700">{p.colis?.poids ?? '—'} kg</td>
                       <td className="px-5 py-4">
-                        <span className="text-sm font-extrabold text-gray-900">{formatXOF(p.prixTotal)}</span>
+                        <Montant eur={Number(p.prixTotal) || 0} taux={taux} className="text-sm font-extrabold text-gray-900" />
                       </td>
                       <td className="px-5 py-4">
-                        <span className={`text-sm font-bold ${p.montantPaye > 0 ? 'text-emerald-600' : 'text-gray-400'}`}>
-                          {p.montantPaye > 0 ? formatXOF(p.montantPaye) : '—'}
+                        <span className={`text-sm font-bold ${Number(p.montantPaye) > 0 ? 'text-emerald-600' : 'text-gray-400'}`}>
+                          {Number(p.montantPaye) > 0 ? <Montant eur={Number(p.montantPaye)} taux={taux} /> : '—'}
                         </span>
                       </td>
                       <td className="px-5 py-4">
@@ -253,15 +297,16 @@ export default function PaiementsPage() {
               </tbody>
             </table>
           </div>
-        )}
+          <Pagination pagination={data?.pagination} onChange={setPage} chargement={isPlaceholderData} />
+        </>)}
       </div>
     </div>
   );
 }
 
-function KpiCard({ icon: Icon, color, iconColor, label, value, isAmount }: {
+function KpiCard({ icon: Icon, color, iconColor, label, value, isAmount, sousTitre }: {
   icon: React.ElementType; color: string; iconColor: string;
-  label: string; value: number | string; isAmount?: boolean;
+  label: string; value: number | string; isAmount?: boolean; sousTitre?: string;
 }) {
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-[0_2px_12px_0_rgba(0,0,0,0.05)] p-5 flex items-center gap-4">
@@ -271,6 +316,7 @@ function KpiCard({ icon: Icon, color, iconColor, label, value, isAmount }: {
       <div>
         <p className="text-xs font-semibold text-gray-400">{label}</p>
         <p className={`font-extrabold text-gray-900 ${isAmount ? 'text-sm' : 'text-2xl'}`}>{value}</p>
+        {sousTitre && <p className="text-[11px] font-medium text-gray-400">{sousTitre}</p>}
       </div>
     </div>
   );

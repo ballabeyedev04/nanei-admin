@@ -3,6 +3,7 @@ import { Users, UserCog, Package, Clock, Truck, CheckCircle, TrendingUp, ArrowUp
 import { clientsApi } from '@/api/clients';
 import { adminsApi } from '@/api/admins';
 import { colisApi } from '@/api/colis';
+import { ErreurChargement } from '@/components/ui/ErreurChargement';
 import { PageSpinner } from '@/components/ui/Spinner';
 import { formatDate, formatPrice } from '@/utils/format';
 import { Badge } from '@/components/ui/Badge';
@@ -57,20 +58,22 @@ export default function DashboardPage() {
 
   const { data: colisBloqués = [] } = useQuery({
     queryKey: ['colis-bloques'],
+    // Appel SANS page : tous les colis en attente sont nécessaires au calcul.
     queryFn: async () => {
       const res = await colisApi.enAttente();
-      const list: Colis[] = (res.data as any).colis ?? (res.data as any).data ?? [];
+      const list: Colis[] = res.data.colis ?? [];
       const now = Date.now();
       const TROIS_JOURS = 3 * 24 * 60 * 60 * 1000;
       return list.filter((c) => now - new Date(c.createdAt).getTime() > TROIS_JOURS);
     },
   });
 
-  const { data: recentColis, isLoading } = useQuery({
+  const { data: recentColis, isLoading, isError, error: erreurChargement, refetch } = useQuery({
     queryKey: ['recent-colis'],
+    // Seulement les 8 plus récents (le back trie du plus récent au plus ancien).
     queryFn: async () => {
-      const res = await colisApi.list();
-      const list: Colis[] = (res.data as any).colis ?? (res.data as any).data ?? [];
+      const res = await colisApi.list({ page: 1, limit: 8 });
+      const list: Colis[] = res.data.colis ?? [];
       return list.slice(0, 8);
     },
   });
@@ -151,7 +154,7 @@ export default function DashboardPage() {
           </span>
         </div>
 
-        {isLoading ? <PageSpinner /> : (
+        {isLoading ? <PageSpinner /> : isError ? <ErreurChargement erreur={erreurChargement} onRetry={() => refetch()} /> : (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>

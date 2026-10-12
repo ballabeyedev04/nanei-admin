@@ -1,11 +1,15 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { Search, Clock, Truck, CheckCircle, Package, ChevronDown, X, Camera, Upload, Layers } from 'lucide-react';
 import { colisApi } from '@/api/colis';
+import { TAILLE_PAGE, versPage } from '@/api/pagination';
+import { useDebounce, useRetourPageVide } from '@/hooks/usePagination';
+import { Pagination } from '@/components/ui/Pagination';
 import { preuveLivraisonApi } from '@/api/preuveLivraison';
 import logger from '@/lib/logger';
 import { Badge } from '@/components/ui/Badge';
+import { ErreurChargement } from '@/components/ui/ErreurChargement';
 import { PageSpinner } from '@/components/ui/Spinner';
 import { formatDate, formatPrice } from '@/utils/format';
 import { confirmAction } from '@/utils/confirm';
@@ -27,6 +31,13 @@ const STATUS_OPTIONS: { value: Colis['statut']; label: string; icon: React.Eleme
   { value: 'livre',      label: 'Livré',      icon: CheckCircle, color: 'text-emerald-700', bg: 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200', ring: 'ring-emerald-300' },
 ];
 
+/** Transitions permises par le back (un colis livré ne change plus de statut). */
+const TRANSITIONS: Record<Colis['statut'], Colis['statut'][]> = {
+  en_attente: ['recupere', 'livre'],
+  recupere:   ['livre', 'en_attente'],
+  livre:      [],
+};
+
 const statusBadge = (s: Colis['statut']) => ({
   en_attente: <Badge variant="pending">En attente</Badge>,
   recupere:   <Badge variant="picked">Récupéré</Badge>,
@@ -39,6 +50,9 @@ function StatusSelector({ colis, onConfirm }: { colis: Colis; onConfirm: (c: Col
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const btnRef = useRef<HTMLButtonElement>(null);
   const current = STATUS_OPTIONS.find((o) => o.value === colis.statut)!;
+  const permis = TRANSITIONS[colis.statut] ?? [];
+  // Statut actuel en tête, puis uniquement les transitions autorisées.
+  const options = STATUS_OPTIONS.filter((o) => o.value === colis.statut || permis.includes(o.value));
 
   const openDropdown = () => {
     if (btnRef.current) {
@@ -56,6 +70,19 @@ function StatusSelector({ colis, onConfirm }: { colis: Colis; onConfirm: (c: Col
     window.addEventListener('resize', close);
     return () => { window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close); };
   }, [open]);
+
+  // Livré : statut définitif, aucun menu.
+  if (permis.length === 0) {
+    return (
+      <span
+        title="Statut définitif : un colis livré ne peut plus changer de statut"
+        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border ${current.bg} ${current.color}`}
+      >
+        <current.icon size={12} />
+        {current.label}
+      </span>
+    );
+  }
 
   return (
     <div>
@@ -76,7 +103,7 @@ function StatusSelector({ colis, onConfirm }: { colis: Colis; onConfirm: (c: Col
             style={{ position: 'absolute', top: pos.top, left: pos.left, zIndex: 9999 }}
             className="bg-white rounded-2xl shadow-[0_8px_32px_0_rgba(0,0,0,0.14)] border border-gray-100 p-1.5 min-w-[170px] animate-[slideUp_0.15s_cubic-bezier(.22,.68,0,1.2)]"
           >
-            {STATUS_OPTIONS.map((opt) => {
+            {options.map((opt) => {
               const isActive = opt.value === colis.statut;
               return (
                 <button
@@ -108,39 +135,70 @@ function PreuveLivraisonModal({ colis, onClose }: { colis: Colis; onClose: () =>
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
 
-  const { data: preuve, isLoading, refetch } = useQuery<PreuveLivraison | null>({
+  const { data: preuve, isLoading, isError, refetch } = useQuery<PreuveLivraison | null>({
     queryKey: ['preuve', colis.id],
-    queryFn: async () => {
-      try {
-        const res = await preuveLivraisonApi.get(colis.id);
-        return (res.data as any).data ?? null;
-      } catch {
-        return null;
-      }
-    },
+    // null = aucune preuve (404). Une autre erreur est affichée telle quelle :
+    // on ne propose PAS d'envoyer une preuve si on n'a pas pu vérifier
+    // qu'il n'en existe pas déjà une.
+    queryFn: () => preuveLivraisonApi.get(colis.id),
+    retry: false,
   });
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const remplacer = Boolean(preuve);
+    if (remplacer && !window.confirm('Une preuve existe déjà pour ce colis. La remplacer par cette nouvelle photo ?')) {
+      if (fileRef.current) fileRef.current.value = '';
+      return;
+    }
     setUploading(true);
     try {
-      logger.info('Upload preuve de livraison', { colis_id: colis.id, reference: colis.reference });
+      logger.info('Upload preuve de livraison', { colis_id: colis.id, reference: colis.reference, remplacer });
       const fd = new FormData();
       fd.append('photo', file);
-      await preuveLivraisonApi.upload(colis.id, fd);
-      logger.action('Preuve de livraison ajoutée', { colis_id: colis.id, reference: colis.reference });
-      notifySuccess('Preuve de livraison ajoutée');
+      await preuveLivraisonApi.upload(colis.id, fd, remplacer);
+      logger.action(remplacer ? 'Preuve de livraison remplacée' : 'Preuve de livraison ajoutée', { colis_id: colis.id, reference: colis.reference });
+      notifySuccess(remplacer ? 'Preuve de livraison remplacée' : 'Preuve de livraison ajoutée');
+      await qc.invalidateQueries({ queryKey: ['preuve', colis.id] });
       refetch();
-      qc.invalidateQueries({ queryKey: ['preuve', colis.id] });
     } catch (err: any) {
       logger.error('Erreur upload preuve de livraison', { page: 'ColisPage', colis_id: colis.id, message: (err as Error).message });
-      notifyError('Erreur lors de l\'upload de la preuve');
+      notifyError(err?.response?.data?.message ?? "Erreur lors de l'upload de la preuve");
+      if (err?.response?.status === 409) refetch();
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
     }
   };
+
+  const gps = preuve && preuve.gps_lat != null && preuve.gps_lng != null
+    ? { lat: Number(preuve.gps_lat), lng: Number(preuve.gps_lng) }
+    : null;
+
+  const boutonEnvoi = (libelle: string) => (
+    <>
+      <input
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        ref={fileRef}
+        className="hidden"
+        onChange={handleUpload}
+      />
+      <button
+        onClick={() => fileRef.current?.click()}
+        disabled={uploading}
+        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#FF7A00] text-white text-sm font-bold hover:bg-[#e06900] transition-colors disabled:opacity-60 active:scale-95"
+      >
+        {uploading ? (
+          <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+        ) : (
+          <Upload size={14} />
+        )}
+        {uploading ? 'Upload en cours…' : libelle}
+      </button>
+    </>
+  );
 
   return (
     <div className="fixed inset-0 z-[9990] flex items-center justify-center p-4 bg-black/50" onClick={onClose}>
@@ -169,17 +227,38 @@ function PreuveLivraisonModal({ colis, onClose }: { colis: Colis; onClose: () =>
             <div className="py-8 flex justify-center">
               <div className="w-8 h-8 border-4 border-[#FF7A00]/30 border-t-[#FF7A00] rounded-full animate-spin" />
             </div>
-          ) : preuve?.photo ? (
+          ) : isError ? (
+            <div className="flex flex-col items-center gap-3 py-8">
+              <p className="text-sm text-red-500 font-medium text-center">Impossible de charger la preuve de livraison.</p>
+              <button onClick={() => refetch()} className="text-sm font-bold text-[#FF7A00] hover:underline">Réessayer</button>
+            </div>
+          ) : preuve ? (
             <div className="space-y-3">
               <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Photo de livraison</p>
-              <img
-                src={preuve.photo}
-                alt="Preuve de livraison"
-                className="w-full rounded-2xl border border-gray-200 object-cover max-h-72"
-              />
-              {preuve.createdAt && (
-                <p className="text-xs text-gray-400">Ajoutée le {formatDate(preuve.createdAt)}</p>
+              <a href={preuve.photo_url} target="_blank" rel="noopener noreferrer">
+                <img
+                  src={preuve.photo_url}
+                  alt="Preuve de livraison"
+                  className="w-full rounded-2xl border border-gray-200 object-cover max-h-72"
+                />
+              </a>
+              {preuve.commentaire && (
+                <p className="text-sm text-gray-600">{preuve.commentaire}</p>
               )}
+              {gps && Number.isFinite(gps.lat) && Number.isFinite(gps.lng) && (
+                <a
+                  href={`https://www.google.com/maps?q=${gps.lat},${gps.lng}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs font-semibold text-[#FF7A00] hover:underline"
+                >
+                  Position GPS : {gps.lat.toFixed(5)}, {gps.lng.toFixed(5)}
+                </a>
+              )}
+              {(preuve.updatedAt ?? preuve.createdAt) && (
+                <p className="text-xs text-gray-400">Enregistrée le {formatDate((preuve.updatedAt ?? preuve.createdAt) as string)}</p>
+              )}
+              <div className="pt-2 flex justify-center">{boutonEnvoi('Remplacer la photo')}</div>
             </div>
           ) : (
             <div className="flex flex-col items-center gap-4 py-8">
@@ -187,26 +266,7 @@ function PreuveLivraisonModal({ colis, onClose }: { colis: Colis; onClose: () =>
                 <Camera size={26} className="text-gray-300" />
               </div>
               <p className="text-sm text-gray-400 font-medium text-center">Aucune preuve de livraison enregistrée</p>
-
-              <input
-                type="file"
-                accept="image/*"
-                ref={fileRef}
-                className="hidden"
-                onChange={handleUpload}
-              />
-              <button
-                onClick={() => fileRef.current?.click()}
-                disabled={uploading}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#FF7A00] text-white text-sm font-bold hover:bg-[#e06900] transition-colors disabled:opacity-60 active:scale-95"
-              >
-                {uploading ? (
-                  <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                ) : (
-                  <Upload size={14} />
-                )}
-                {uploading ? 'Upload en cours…' : 'Ajouter une preuve'}
-              </button>
+              {boutonEnvoi('Ajouter une preuve')}
             </div>
           )}
         </div>
@@ -220,30 +280,39 @@ export default function ColisPage() {
   const qc = useQueryClient();
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
   const [selectedPreuve, setSelectedPreuve] = useState<Colis | null>(null);
+  const q = useDebounce(search.trim(), 400);
 
-  const { data: colis = [], isLoading } = useQuery({
-    queryKey: ['colis', filter],
+  // Recherche (référence ou destination) faite CÔTÉ SERVEUR via `q`.
+  const { data, isLoading, isError, error: erreurChargement, refetch, isPlaceholderData } = useQuery({
+    queryKey: ['colis', filter, { page, q }],
     queryFn: async () => {
+      const params = { page, limit: TAILLE_PAGE, q };
       let res;
-      if (filter === 'en_attente') res = await colisApi.enAttente();
-      else if (filter === 'recupere') res = await colisApi.recuperes();
-      else if (filter === 'livre') res = await colisApi.livres();
-      else res = await colisApi.list();
-      return (res.data as any).colis ?? (res.data as any).data ?? [];
+      if (filter === 'en_attente') res = await colisApi.enAttente(params);
+      else if (filter === 'recupere') res = await colisApi.recuperes(params);
+      else if (filter === 'livre') res = await colisApi.livres(params);
+      else res = await colisApi.list(params);
+      return versPage(res.data.colis, res.data.pagination);
     },
+    placeholderData: keepPreviousData,
   });
+  useRetourPageVide(data, page, setPage, isPlaceholderData);
 
-  const filtered = colis.filter((c: Colis) =>
-    search === '' ||
-    c.reference.toLowerCase().includes(search.toLowerCase()) ||
-    c.destination.toLowerCase().includes(search.toLowerCase())
-  );
+  const colis = data?.items ?? [];
+  const filtered = colis;
+  const total = data?.pagination.total ?? 0;
+
+  const changerFiltre = (f: Filter) => { setFilter(f); setPage(1); };
+  const changerRecherche = (texte: string) => { setSearch(texte); setPage(1); };
 
   // Nombre de colis par lot_id — pour afficher le badge "Lot (n)" uniquement
-  // quand un lot regroupe réellement plusieurs colis.
+  // quand un lot regroupe réellement plusieurs colis. Le back renvoie la
+  // taille réelle du lot (`taille_lot`, toutes pages) ; repli sur le compte
+  // de la page affichée.
   const tailleLot = colis.reduce((acc: Record<string, number>, c: Colis) => {
-    if (c.lot_id) acc[c.lot_id] = (acc[c.lot_id] ?? 0) + 1;
+    if (c.lot_id) acc[c.lot_id] = c.taille_lot ?? (acc[c.lot_id] ?? 0) + 1;
     return acc;
   }, {});
 
@@ -259,13 +328,16 @@ export default function ColisPage() {
       qc.invalidateQueries({ queryKey: ['kpi-recuperes'] });
       qc.invalidateQueries({ queryKey: ['kpi-livres'] });
       qc.invalidateQueries({ queryKey: ['recent-colis'] });
+      qc.invalidateQueries({ queryKey: ['colis-bloques'] });
       const labels = { en_attente: 'En attente', recupere: 'Récupéré', livre: 'Livré' };
       logger.action('Statut colis changé', { colis_id: id, nouveau_statut: action });
       notifySuccess(`Statut mis à jour : ${labels[action]}`);
     },
     onError: (e: any) => {
       logger.error('Erreur changement statut colis', { page: 'ColisPage', message: e?.response?.data?.message ?? e?.message });
+      // 409 : transition refusée par le back (colis livré, déjà dans ce statut…) — on affiche son message.
       notifyError(e?.response?.data?.message ?? 'Erreur');
+      if (e?.response?.status === 409 || e?.response?.status === 404) qc.invalidateQueries({ queryKey: ['colis'] });
     },
   });
 
@@ -287,7 +359,7 @@ export default function ColisPage() {
       <div>
         <h1 className="text-2xl font-extrabold text-gray-900 tracking-tight">Gestion des colis</h1>
         <p className="text-gray-400 text-sm mt-0.5">
-          {colis.length} colis enregistré{colis.length > 1 ? 's' : ''}
+          {total} colis {q ? 'trouvé' : 'enregistré'}{total > 1 ? 's' : ''}
         </p>
       </div>
 
@@ -298,7 +370,7 @@ export default function ColisPage() {
           return (
             <button
               key={value}
-              onClick={() => setFilter(value)}
+              onClick={() => changerFiltre(value)}
               className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-bold border transition-all duration-200 active:scale-95 ${
                 isActive
                   ? 'bg-[#FF7A00] text-white border-[#FF7A00] shadow-lg shadow-[#FF7A00]/25'
@@ -324,16 +396,16 @@ export default function ColisPage() {
             className="flex-1 text-sm font-medium outline-none placeholder-gray-400 bg-transparent text-gray-900"
             placeholder="Rechercher par référence ou destination..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => changerRecherche(e.target.value)}
           />
           {search && (
-            <button onClick={() => setSearch('')} className="text-xs text-gray-400 hover:text-gray-600 font-medium transition-colors">
+            <button onClick={() => changerRecherche('')} className="text-xs text-gray-400 hover:text-gray-600 font-medium transition-colors">
               Effacer
             </button>
           )}
         </div>
 
-        {isLoading ? <PageSpinner /> : (
+        {isLoading ? <PageSpinner /> : isError ? <ErreurChargement erreur={erreurChargement} onRetry={() => refetch()} /> : (<>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -378,7 +450,14 @@ export default function ColisPage() {
                       {c.recepteur ? `${c.recepteur.prenom} ${c.recepteur.nom}` : '—'}
                     </td>
                     <td className="px-5 py-4 text-sm text-gray-600">{c.destination}</td>
-                    <td className="px-5 py-4 text-sm text-gray-600 whitespace-nowrap">{c.poids} kg</td>
+                    <td className="px-5 py-4 text-sm text-gray-600 whitespace-nowrap">
+                      {c.poids} kg
+                      {c.type_transport && (
+                        <span className="block text-[11px] font-semibold text-gray-400">
+                          {c.type_transport === 'maritime' ? 'Maritime' : 'Aérien'}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-5 py-4 text-sm font-bold text-gray-900 whitespace-nowrap">{formatPrice(c.prix)}</td>
                     <td className="px-5 py-4">{statusBadge(c.statut)}</td>
                     <td className="px-5 py-4 text-sm text-gray-400 whitespace-nowrap">{formatDate(c.createdAt)}</td>
@@ -401,7 +480,8 @@ export default function ColisPage() {
               </tbody>
             </table>
           </div>
-        )}
+          <Pagination pagination={data?.pagination} onChange={setPage} chargement={isPlaceholderData} />
+        </>)}
       </div>
 
       <style>{`

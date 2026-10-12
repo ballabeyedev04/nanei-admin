@@ -18,12 +18,18 @@ export interface Colis {
   prix: number;
   destination: string;
   description?: string;
-  type_colis?: string;
+  /** Nature du colis, texte libre (« Vêtements »…). */
+  type_colis?: string | null;
+  /** Mode de transport choisi à l'envoi ; null pour un ancien colis. */
+  type_transport?: 'aerien' | 'maritime' | null;
   statut: 'en_attente' | 'recupere' | 'livre';
   createdAt: string;
-  expediteur?: { id: string; nom: string; prenom: string; email: string };
-  recepteur?: { id: string; nom: string; prenom: string; email: string };
+  // Le back ne renvoie pas l'id des personnes (nom, prénom, e-mail, téléphone).
+  expediteur?: { nom: string; prenom: string; email: string; telephone?: string };
+  recepteur?: { nom: string; prenom: string; email: string; telephone?: string };
   lot_id?: string | null;
+  /** Nombre total de colis du lot (toutes pages), renvoyé par les listes admin. */
+  taille_lot?: number;
 }
 
 export interface Country {
@@ -86,31 +92,35 @@ export interface KpiStats {
 }
 
 export type StatutReclamation = 'ouverte' | 'en_cours' | 'resolue' | 'rejetee';
-export type TypeReclamation   = 'perdu' | 'endommage' | 'retard' | 'autre';
+// Valeurs du back : `endommagé` AVEC accent (seule exception aux codes sans accent).
+export type TypeReclamation   = 'perdu' | 'endommagé' | 'retard' | 'autre';
 
-export interface HistoriqueReclamation {
-  statut: StatutReclamation;
-  commentaire?: string;
-  date: string;
-  admin?: string;
-}
-
+/**
+ * Réclamation telle qu'affichée par l'admin. Construite par
+ * `api/reclamations.ts` à partir de la réponse du back
+ * (`colis.reference`, `utilisateur`, `commentaire_admin`).
+ */
 export interface Reclamation {
   id: string;
   colisReference: string;
-  client: { id: string; nom: string; prenom: string; email: string };
+  colisDestination?: string;
+  client: { nom: string; prenom: string; email: string; telephone?: string };
   type: TypeReclamation;
   statut: StatutReclamation;
   description: string;
-  photos?: string[];
-  historique?: HistoriqueReclamation[];
+  photos: string[];
+  /** Dernier commentaire envoyé au client (colonne commentaire_admin). */
+  commentaireAdmin?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
+/** Avis tel qu'affiché par l'admin, construit par `api/avis.ts`. */
 export interface Avis {
   id: string;
   colisReference: string;
-  client: { id: string; nom: string; prenom: string };
+  colisDestination?: string;
+  client: { nom: string; prenom: string; email?: string };
   note: number;
   commentaire?: string;
   createdAt: string;
@@ -122,29 +132,57 @@ export interface AvisStats {
   distribution: Record<number, number>;
 }
 
+/** Ligne du journal d'audit — noms de champs du back (snake_case). */
 export interface AuditLog {
   id: string;
-  admin: { id: string; nom: string; prenom: string };
+  admin_id?: string | null;
+  admin: { nom: string; prenom: string; email?: string } | null;
   action: string;
   entite: string;
-  entiteId: string;
+  entite_id: string | null;
   details?: Record<string, unknown>;
-  ip?: string;
+  ip_address: string | null;
   createdAt: string;
 }
 
 export interface Rapport {
   filename: string;
-  mois: string;
-  annee: string;
+  mois: string | null;
+  annee: string | null;
   label: string;
   url?: string;
+  taille?: number;
 }
 
+/** Preuve de livraison — noms de champs du back. */
 export interface PreuveLivraison {
   id?: string;
-  photo?: string;
-  lat?: number;
-  lng?: number;
+  colis_id?: string;
+  photo_url: string;
+  commentaire?: string | null;
+  gps_lat?: number | string | null;
+  gps_lng?: number | string | null;
   createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Métadonnées de pagination renvoyées par le back quand `page`/`limit` sont fournis. */
+export interface Pagination {
+  page: number;
+  limit: number;
+  total: number;
+  pages: number;
+}
+
+/** Une page d'une liste paginée côté serveur. */
+export interface PageListe<T> {
+  items: T[];
+  pagination: Pagination;
+}
+
+/** Paramètres communs des listes paginées (`q` : recherche « contient » côté serveur). */
+export interface ParamsListe {
+  page?: number;
+  limit?: number;
+  q?: string;
 }

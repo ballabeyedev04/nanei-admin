@@ -23,6 +23,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Tests (Vitest) : un échec bloque la construction et le déploiement.
+      - name: Tests
+        run: npm test
+
       - name: Write .env
         run: echo "VITE_API_URL=${{ secrets.VITE_API_URL }}" > .env
 

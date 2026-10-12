@@ -28,5 +28,8 @@
       "@/*": ["src/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Tests (Vitest) hors de la construction de production : `tsc -b` ne les
+  // compile pas et `vite build` ne les embarque jamais (aucun import depuis l’app).
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/test"]
 }

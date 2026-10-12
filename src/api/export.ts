@@ -2,7 +2,7 @@ import { api } from './axios';
 
 export const exportApi = {
   colis: (format: 'csv' | 'xlsx', params?: Record<string, string>) =>
-    api.get('/admin/export/colis', { params: { format, ...params }, responseType: 'blob' }),
+    api.get('/admin/export/colis', { params: { format, ...params }, responseType: 'blob', timeout: 60_000 }),
   paiements: (format: 'csv' | 'xlsx', params?: Record<string, string>) =>
-    api.get('/admin/export/paiements', { params: { format, ...params }, responseType: 'blob' }),
+    api.get('/admin/export/paiements', { params: { format, ...params }, responseType: 'blob', timeout: 60_000 }),
 };

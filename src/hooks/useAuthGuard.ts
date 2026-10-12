@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import { useAuthStore } from '@/store/authStore';
 import { authApi } from '@/api/auth';
 
-// Codes serveur qui invalident la session
-const SESSION_INVALID_CODES = new Set([401, 402, 403]);
+// Codes serveur qui invalident la session. Un 401 a déjà fait l'objet d'un
+// renouvellement du jeton dans api/axios.ts : s'il revient ici, la session
+// est vraiment morte.
+const SESSION_INVALID_CODES = new Set([401, 403, 404]);
 
 /**
  * Vérifie au montage que le token stocké est toujours valide côté serveur.
@@ -14,7 +16,7 @@ export function useAuthGuard() {
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
-    if (!token) {
+    if (!token && !useAuthStore.getState().refreshToken) {
       setChecking(false);
       return;
     }
@@ -31,12 +33,10 @@ export function useAuthGuard() {
       })
       .catch((err) => {
         const status = err?.response?.status;
-        // Toujours déconnecter si le serveur rejette la session
-        if (!status || SESSION_INVALID_CODES.has(status) || status >= 500) {
-          clearAuth();
-        }
-        // 404 sur /me = endpoint inconnu → déconnecter aussi
-        if (status === 404) clearAuth();
+        // Déconnecter seulement si le serveur REJETTE la session. Serveur
+        // injoignable ou en erreur (pas de réponse, 5xx) : on garde la
+        // session, les appels suivants réessaieront.
+        if (status && SESSION_INVALID_CODES.has(status)) clearAuth();
       })
       .finally(() => setChecking(false));
 

@@ -1,12 +1,16 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Shield, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { Shield } from 'lucide-react';
 import { auditLogsApi } from '@/api/auditLogs';
 import { adminsApi } from '@/api/admins';
+import { TAILLE_PAGE, versPage } from '@/api/pagination';
+import { useDebounce } from '@/hooks/usePagination';
+import { Pagination } from '@/components/ui/Pagination';
+import { ErreurChargement } from '@/components/ui/ErreurChargement';
 import { PageSpinner } from '@/components/ui/Spinner';
-import type { AuditLog, User } from '@/types';
-
-const PAGE_SIZE = 20;
+import { useAuthStore } from '@/store/authStore';
+import type { User } from '@/types';
+import type { FiltresAudit } from '@/api/auditLogs';
 
 function formatDateTime(iso: string) {
   const d = new Date(iso);
@@ -26,38 +30,49 @@ export default function AuditLogPage() {
   const [dateDebut, setDateDebut] = useState('');
   const [dateFin, setDateFin] = useState('');
 
+  // Liste déroulante : appel SANS page → liste complète des admins.
   const { data: adminsData } = useQuery({
     queryKey: ['admins-list'],
     queryFn: async () => {
       const res = await adminsApi.list();
-      const raw = res.data as any;
-      return (raw.admins ?? raw.data ?? []) as User[];
+      return res.data.data ?? [];
     },
   });
-  const admins: User[] = adminsData ?? [];
+  // liste-admins exclut l'admin connecté : on l'ajoute pour qu'il puisse
+  // filtrer ses propres actions.
+  const moi = useAuthStore((s) => s.user);
+  const admins: User[] = [
+    ...(moi ? [moi] : []),
+    ...(adminsData ?? []).filter((a) => a.id !== moi?.id),
+  ];
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['audit-logs', page, adminId, action, dateDebut, dateFin],
+  // Saisie libre de l'action : envoyée au back après 400 ms sans frappe.
+  const actionFiltre = useDebounce(action.trim(), 400);
+
+  const { data, isLoading, isError, error: erreurChargement, refetch, isPlaceholderData } = useQuery({
+    queryKey: ['audit-logs', { page, adminId, action: actionFiltre, dateDebut, dateFin }],
     queryFn: async () => {
-      const params: Record<string, any> = { page, limit: PAGE_SIZE };
-      if (adminId)   params.admin_id  = adminId;
-      if (action)    params.action    = action;
-      if (dateDebut) params.dateDebut = dateDebut;
-      if (dateFin)   params.dateFin   = dateFin;
+      // Noms de paramètres du back : admin_id, action, date_debut, date_fin
+      // (dateDebut / dateFin étaient ignorés : le filtre n'avait aucun effet).
+      const params: FiltresAudit = { page, limit: TAILLE_PAGE };
+      if (adminId)      params.admin_id   = adminId;
+      // Le back compare l'action à l'identique et les stocke en MAJUSCULES
+      // (UPDATE_STATUT…) : « update_statut » saisi tel quel ne trouvait rien.
+      if (actionFiltre) params.action     = actionFiltre.toUpperCase();
+      if (dateDebut)    params.date_debut = dateDebut;
+      if (dateFin)      params.date_fin   = dateFin;
       const res = await auditLogsApi.list(params);
-      const raw = res.data as any;
-      return {
-        logs:  (raw.data ?? raw.logs ?? []) as AuditLog[],
-        total: raw.total ?? 0,
-        pages: raw.pages ?? 1,
-      };
+      const d = res.data;
+      return versPage(d.logs, d.pagination ?? { page: d.page ?? page, limit: TAILLE_PAGE, total: d.total ?? 0, pages: d.pages ?? 1 });
     },
+    placeholderData: keepPreviousData,
   });
 
-  const logs   = data?.logs  ?? [];
-  const pages  = data?.pages ?? 1;
+  const logs = data?.items ?? [];
 
-  const handleFilter = () => setPage(1);
+  // Tout changement de filtre revient à la première page.
+  const filtrer = <T,>(maj: (v: T) => void) => (v: T) => { maj(v); setPage(1); };
+  const handleFilter = () => { setPage(1); void refetch(); };
 
   return (
     <div className="space-y-7">
@@ -75,12 +90,12 @@ export default function AuditLogPage() {
             <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-1.5">Administrateur</label>
             <select
               value={adminId}
-              onChange={(e) => setAdminId(e.target.value)}
+              onChange={(e) => filtrer(setAdminId)(e.target.value)}
               className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm font-medium text-gray-700 outline-none focus:border-[#FF7A00] focus:ring-2 focus:ring-[#FF7A00]/10 transition-all bg-white"
             >
               <option value="">Tous les admins</option>
               {admins.map((a) => (
-                <option key={a.id} value={a.id}>{a.prenom} {a.nom}</option>
+                <option key={a.id} value={a.id}>{a.prenom} {a.nom}{a.id === moi?.id ? ' (moi)' : ''}</option>
               ))}
             </select>
           </div>
@@ -91,7 +106,7 @@ export default function AuditLogPage() {
             <input
               type="text"
               value={action}
-              onChange={(e) => setAction(e.target.value)}
+              onChange={(e) => filtrer(setAction)(e.target.value)}
               placeholder="Ex: UPDATE_STATUT"
               className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm font-medium text-gray-700 outline-none focus:border-[#FF7A00] focus:ring-2 focus:ring-[#FF7A00]/10 transition-all placeholder-gray-400"
             />
@@ -103,7 +118,7 @@ export default function AuditLogPage() {
             <input
               type="date"
               value={dateDebut}
-              onChange={(e) => setDateDebut(e.target.value)}
+              onChange={(e) => filtrer(setDateDebut)(e.target.value)}
               className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm font-medium text-gray-700 outline-none focus:border-[#FF7A00] focus:ring-2 focus:ring-[#FF7A00]/10 transition-all"
             />
           </div>
@@ -114,7 +129,7 @@ export default function AuditLogPage() {
             <input
               type="date"
               value={dateFin}
-              onChange={(e) => setDateFin(e.target.value)}
+              onChange={(e) => filtrer(setDateFin)(e.target.value)}
               className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm font-medium text-gray-700 outline-none focus:border-[#FF7A00] focus:ring-2 focus:ring-[#FF7A00]/10 transition-all"
             />
           </div>
@@ -131,7 +146,7 @@ export default function AuditLogPage() {
 
       {/* Tableau */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-[0_2px_12px_0_rgba(0,0,0,0.05)] overflow-hidden">
-        {isLoading ? <PageSpinner /> : (
+        {isLoading ? <PageSpinner /> : isError ? <ErreurChargement erreur={erreurChargement} onRetry={() => refetch()} /> : (
           <>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -154,7 +169,7 @@ export default function AuditLogPage() {
                         </div>
                       </td>
                     </tr>
-                  ) : logs.map((log: AuditLog) => {
+                  ) : logs.map((log) => {
                     const detailsStr = log.details ? JSON.stringify(log.details) : '';
                     return (
                       <tr key={log.id} className="hover:bg-[#FFF9F5] transition-colors duration-150">
@@ -167,7 +182,7 @@ export default function AuditLogPage() {
                           </span>
                         </td>
                         <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{log.entite}</td>
-                        <td className="px-4 py-3 text-sm font-mono text-[#FF7A00] whitespace-nowrap">{log.entiteId?.slice(-8) ?? '—'}</td>
+                        <td className="px-4 py-3 text-sm font-mono text-[#FF7A00] whitespace-nowrap">{log.entite_id ? log.entite_id.slice(-8) : '—'}</td>
                         <td className="px-4 py-3 max-w-[220px]">
                           {detailsStr ? (
                             <span
@@ -180,7 +195,7 @@ export default function AuditLogPage() {
                             <span className="text-gray-300 text-xs italic">—</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-xs text-gray-400 font-mono whitespace-nowrap">{log.ip ?? '—'}</td>
+                        <td className="px-4 py-3 text-xs text-gray-400 font-mono whitespace-nowrap">{log.ip_address ?? '—'}</td>
                         <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">{formatDateTime(log.createdAt)}</td>
                       </tr>
                     );
@@ -189,28 +204,7 @@ export default function AuditLogPage() {
               </table>
             </div>
 
-            {/* Pagination */}
-            {pages > 1 && (
-              <div className="px-5 py-4 border-t border-gray-100 flex items-center justify-between">
-                <p className="text-xs text-gray-400 font-medium">Page {page} sur {pages}</p>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    disabled={page === 1}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                  >
-                    <ChevronLeft size={13} /> Précédent
-                  </button>
-                  <button
-                    onClick={() => setPage((p) => Math.min(pages, p + 1))}
-                    disabled={page === pages}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                  >
-                    Suivant <ChevronRight size={13} />
-                  </button>
-                </div>
-              </div>
-            )}
+            <Pagination pagination={data?.pagination} onChange={setPage} chargement={isPlaceholderData} />
           </>
         )}
       </div>

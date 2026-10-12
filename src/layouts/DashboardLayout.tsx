@@ -31,13 +31,18 @@ const NAV = [
 
 export default function DashboardLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const { user, logout } = useAuthStore();
+  const { user, logout, refreshToken } = useAuthStore();
   const navigate = useNavigate();
 
   const handleLogout = async () => {
     const ok = await confirmLogout();
     if (!ok) return;
-    try { await authApi.logout(''); } catch (_) {}
+    // Révoque le refresh token côté serveur (avant : '' → jamais révoqué).
+    try {
+      if (refreshToken) await authApi.logout(refreshToken);
+    } catch {
+      // Serveur injoignable : on déconnecte quand même localement.
+    }
     logout();
     navigate(PATHS.LOGIN);
     notifySuccess('À bientôt !');

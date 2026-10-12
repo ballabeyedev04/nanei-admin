@@ -1,24 +1,33 @@
 import { useState } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, keepPreviousData } from '@tanstack/react-query';
 import { Search, Mail, Send, Clock } from 'lucide-react';
 import { messagesApi, type MessageClient } from '@/api/messages';
+import { TAILLE_PAGE, versPage } from '@/api/pagination';
+import { useDebounce, useRetourPageVide } from '@/hooks/usePagination';
+import { Pagination } from '@/components/ui/Pagination';
 import { Modal } from '@/components/ui/Modal';
+import { ErreurChargement } from '@/components/ui/ErreurChargement';
 import { PageSpinner } from '@/components/ui/Spinner';
 import { formatDate } from '@/utils/format';
 import { notifySuccess, notifyError } from '@/utils/notify';
 
 export default function MessagesPage() {
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const q = useDebounce(search.trim(), 400);
   const [selected, setSelected] = useState<MessageClient | null>(null);
   const [reponse, setReponse] = useState('');
 
-  const { data: messages = [], isLoading } = useQuery({
-    queryKey: ['messages'],
+  // Recherche (e-mail, objet, message) faite côté serveur via `q`.
+  const { data, isLoading, isError, error: erreurChargement, refetch, isPlaceholderData } = useQuery({
+    queryKey: ['messages', { page, q }],
     queryFn: async () => {
-      const res = await messagesApi.list();
-      return res.data?.data ?? [];
+      const res = await messagesApi.list({ page, limit: TAILLE_PAGE, q });
+      return versPage(res.data.data, res.data.pagination);
     },
+    placeholderData: keepPreviousData,
   });
+  useRetourPageVide(data, page, setPage, isPlaceholderData);
 
   const repondreMut = useMutation({
     mutationFn: ({ id, reponse }: { id: string; reponse: string }) =>
@@ -36,18 +45,15 @@ export default function MessagesPage() {
     repondreMut.mutate({ id: selected.id, reponse: reponse.trim() });
   };
 
-  const filtered = messages.filter((m: MessageClient) =>
-    search === '' ||
-    m.email.toLowerCase().includes(search.toLowerCase()) ||
-    m.objet.toLowerCase().includes(search.toLowerCase()) ||
-    m.description.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = data?.items ?? [];
+  const total = data?.pagination.total ?? 0;
+  const changerRecherche = (texte: string) => { setSearch(texte); setPage(1); };
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Messages clients</h1>
-        <p className="text-gray-500 text-sm mt-0.5">{messages.length} message{messages.length > 1 ? 's' : ''} reçu{messages.length > 1 ? 's' : ''}</p>
+        <p className="text-gray-500 text-sm mt-0.5">{total} message{total > 1 ? 's' : ''} {q ? 'trouvé' : 'reçu'}{total > 1 ? 's' : ''}</p>
       </div>
 
       <div className="card p-0 overflow-hidden">
@@ -57,11 +63,11 @@ export default function MessagesPage() {
             className="flex-1 text-sm outline-none placeholder-gray-400 bg-transparent"
             placeholder="Rechercher par email, objet, message..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => changerRecherche(e.target.value)}
           />
         </div>
 
-        {isLoading ? <PageSpinner /> : (
+        {isLoading ? <PageSpinner /> : isError ? <ErreurChargement erreur={erreurChargement} onRetry={() => refetch()} /> : (<>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -75,7 +81,7 @@ export default function MessagesPage() {
                 {filtered.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="px-4 py-10 text-center text-gray-400 text-sm">
-                      {search ? `Aucun résultat pour "${search}"` : 'Aucun message reçu pour l\'instant'}
+                      {q ? `Aucun résultat pour "${q}"` : 'Aucun message reçu pour l\'instant'}
                     </td>
                   </tr>
                 ) : filtered.map((m: MessageClient) => (
@@ -111,7 +117,8 @@ export default function MessagesPage() {
               </tbody>
             </table>
           </div>
-        )}
+          <Pagination pagination={data?.pagination} onChange={setPage} chargement={isPlaceholderData} />
+        </>)}
       </div>
 
       {/* Modal réponse */}

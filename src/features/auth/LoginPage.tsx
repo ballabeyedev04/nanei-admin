@@ -22,13 +22,15 @@ export default function LoginPage() {
     try {
       logger.info('Tentative de connexion admin', { email: logger.maskEmail(email) });
       const res = await authApi.login({ identifiant: email, mot_de_passe: password });
-      const { token, utilisateur } = res.data;
+      const { token, refreshToken, utilisateur } = res.data;
       if (utilisateur.role !== 'Admin') {
         logger.warn('Tentative connexion refusée — rôle insuffisant', { role: utilisateur.role });
         notifyError('Accès réservé aux administrateurs');
         return;
       }
-      setAuth(utilisateur, token);
+      // refreshToken conservé : la session est renouvelée automatiquement
+      // (voir api/axios.ts) au lieu d'être coupée au bout d'1 h.
+      setAuth(utilisateur, token, refreshToken);
       logger.action('Admin connecté', { admin_id: utilisateur.id, email: logger.maskEmail(utilisateur.email) });
       notifySuccess(`Bienvenue, ${utilisateur.prenom} !`);
       navigate(PATHS.DASHBOARD);

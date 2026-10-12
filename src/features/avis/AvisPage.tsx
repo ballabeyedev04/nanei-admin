@@ -1,7 +1,10 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { Star } from 'lucide-react';
 import { avisApi } from '@/api/avis';
+import { TAILLE_PAGE } from '@/api/pagination';
+import { Pagination } from '@/components/ui/Pagination';
+import { ErreurChargement } from '@/components/ui/ErreurChargement';
 import { PageSpinner } from '@/components/ui/Spinner';
 import { formatDate } from '@/utils/format';
 import type { Avis, AvisStats } from '@/types';
@@ -45,17 +48,15 @@ function DistributionBar({ note, count, total }: { note: number; count: number; 
 /* ── Page principale ─────────────────────────────────────────────── */
 export default function AvisPage() {
   const [filterNote, setFilterNote] = useState<number | undefined>(undefined);
+  const [page, setPage] = useState(1);
+  const changerNote = (note: number | undefined) => { setFilterNote(note); setPage(1); };
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['avis', filterNote],
-    queryFn: async () => {
-      const res = await avisApi.list(filterNote);
-      const raw = res.data as any;
-      const avis: Avis[]      = raw.data ?? raw.avis ?? [];
-      const rawStats = raw.stats ?? {};
-      const stats: AvisStats  = { moyenne: rawStats.note_moyenne ?? rawStats.moyenne ?? 0, total: rawStats.total ?? avis.length, distribution: rawStats.distribution ?? {} };
-      return { avis, stats };
-    },
+  // Filtre `note` côté serveur ; `stats` porte toujours sur TOUS les avis.
+  const { data, isLoading, isError, error: erreurChargement, refetch, isPlaceholderData } = useQuery({
+    queryKey: ['avis', { page, note: filterNote }],
+    // avisApi convertit la réponse du back (utilisateur, colis.reference).
+    queryFn: () => avisApi.list({ page, limit: TAILLE_PAGE, note: filterNote }),
+    placeholderData: keepPreviousData,
   });
 
   const avis:  Avis[]     = data?.avis   ?? [];
@@ -97,7 +98,7 @@ export default function AvisPage() {
       {/* Filtres par note */}
       <div className="flex flex-wrap gap-2">
         <button
-          onClick={() => setFilterNote(undefined)}
+          onClick={() => changerNote(undefined)}
           className={`px-4 py-2 rounded-xl text-sm font-bold border transition-all active:scale-95 ${
             filterNote === undefined
               ? 'bg-[#FF7A00] text-white border-[#FF7A00] shadow-lg shadow-[#FF7A00]/25'
@@ -109,7 +110,7 @@ export default function AvisPage() {
         {[5, 4, 3, 2, 1].map((n) => (
           <button
             key={n}
-            onClick={() => setFilterNote(n)}
+            onClick={() => changerNote(n)}
             className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold border transition-all active:scale-95 ${
               filterNote === n
                 ? 'bg-[#FF7A00] text-white border-[#FF7A00] shadow-lg shadow-[#FF7A00]/25'
@@ -123,7 +124,7 @@ export default function AvisPage() {
 
       {/* Tableau */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-[0_2px_12px_0_rgba(0,0,0,0.05)] overflow-hidden">
-        {isLoading ? <PageSpinner /> : (
+        {isLoading ? <PageSpinner /> : isError ? <ErreurChargement erreur={erreurChargement} onRetry={() => refetch()} /> : (<>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -151,7 +152,8 @@ export default function AvisPage() {
                       <span className="text-sm font-bold text-[#FF7A00]">{a.colisReference}</span>
                     </td>
                     <td className="px-5 py-4">
-                      <p className="text-sm font-semibold text-gray-900">{a.client.prenom} {a.client.nom}</p>
+                      <p className="text-sm font-semibold text-gray-900">{`${a.client.prenom} ${a.client.nom}`.trim() || '—'}</p>
+                      {a.client.email && <p className="text-xs text-gray-400">{a.client.email}</p>}
                     </td>
                     <td className="px-5 py-4">
                       <Stars note={a.note} />
@@ -169,7 +171,8 @@ export default function AvisPage() {
               </tbody>
             </table>
           </div>
-        )}
+          <Pagination pagination={data?.pagination} onChange={setPage} chargement={isPlaceholderData} />
+        </>)}
       </div>
     </div>
   );
