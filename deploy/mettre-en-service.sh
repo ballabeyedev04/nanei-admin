@@ -182,7 +182,9 @@ cmd_installer() {
   nom_valide "$nom" || erreur "nom de version invalide : « $nom » (attendu AAAAMMJJ-HHMMSS-<sha>)"
   [[ "$attendu" =~ ^[0-9a-f]{64}$ ]] || erreur "somme SHA-256 attendue invalide : « $attendu »"
   [ -f "$archive" ] || erreur "archive introuvable : $archive"
-  [[ "$CONSERVER" =~ ^[0-9]+$ ]] && [ "$CONSERVER" -ge 2 ] || erreur "NANEI_CONSERVER doit valoir au moins 2"
+  if ! [[ "$CONSERVER" =~ ^[0-9]+$ ]] || [ "$CONSERVER" -lt 2 ]; then
+    erreur "NANEI_CONSERVER doit valoir au moins 2"
+  fi
 
   verifier_outils
 
@@ -254,8 +256,9 @@ cmd_revenir() {
 
   local actuelle
   actuelle="$(version_actuelle)"
-  [ -n "$actuelle" ] && [ "$actuelle" != "__dossier_reel__" ] \
-    || erreur "$LIEN n'est pas encore un lien géré par cette chaîne : aucun retour arrière possible"
+  if [ -z "$actuelle" ] || [ "$actuelle" = "__dossier_reel__" ]; then
+    erreur "$LIEN n'est pas encore un lien géré par cette chaîne : aucun retour arrière possible"
+  fi
 
   if [ "$cible" = "precedente" ] || [ "$cible" = "précédente" ]; then
     cible="$(version_avant "$actuelle")"

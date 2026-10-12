@@ -19,7 +19,10 @@
 
 set -Eeuo pipefail
 
-[ "$#" -ge 1 ] && [ "$#" -le 2 ] || { echo "usage : $0 <URL de l'admin> [<sha attendu>]" >&2; exit 2; }
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+  echo "usage : $0 <URL de l'admin> [<sha attendu>]" >&2
+  exit 2
+fi
 URL="${1%/}"
 SHA_ATTENDU="${2:-}"
 ESSAIS="${NANEI_ESSAIS:-6}"
