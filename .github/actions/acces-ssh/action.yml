@@ -77,5 +77,25 @@ runs:
           ServerAliveCountMax 4
         EOF
         chmod 600 ~/.ssh/config
-        ssh nanei-vps true || { echo "::error::Connexion SSH refusée par $HOTE (clé, utilisateur ou empreinte) : voir docs/DEPLOIEMENT_ADMIN.md"; exit 1; }
+        diagnostiquer_ssh() {
+          echo "::group::Diagnostic SSH (données publiques)"
+          if [ ! -s ~/.ssh/known_hosts_nanei ]; then
+            echo "known_hosts vide : le secret VPS_KNOWN_HOSTS ne contient aucune ligne."
+          else
+            echo "Lignes lues dans VPS_KNOWN_HOSTS (nom ou adresse → type de clé) :"
+            awk 'NF>=3 && $2 ~ /^(ssh-|ecdsa-|sk-)/ { print "  " $1 " → " $2 }' ~/.ssh/known_hosts_nanei
+            if ! awk 'NF>=3 && $2 ~ /^(ssh-|ecdsa-|sk-)/' ~/.ssh/known_hosts_nanei | grep -q .; then
+              echo "Aucune ligne au format known_hosts (« hôte type clé ») : le secret contient sans doute les EMPREINTES (SHA256:…) au lieu du contenu du fichier produit par ssh-keyscan."
+            fi
+            if ! awk '{ print $1 }' ~/.ssh/known_hosts_nanei | tr ',' '\n' | grep -qxF "$HOTE"; then
+              echo "Aucune ligne pour le nom EXACT de VPS_HOST (« $HOTE ») : régénérer avec « ssh-keyscan $HOTE » (OpenSSH compare le nom tel qu'il est écrit : une IP ne vaut pas pour un domaine)."
+            fi
+          fi
+          echo "::endgroup::"
+        }
+        ssh nanei-vps true || {
+          diagnostiquer_ssh
+          echo "::error::Connexion SSH refusée par $HOTE (empreinte absente de VPS_KNOWN_HOSTS, clé ou utilisateur : voir le diagnostic ci-dessus et docs/DEPLOIEMENT_ADMIN.md)"
+          exit 1
+        }
         echo "| Connexion SSH | établie avec la clé de déploiement | ✅ |" >> "$GITHUB_STEP_SUMMARY"
