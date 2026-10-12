@@ -13,6 +13,7 @@ import { PageSpinner } from '@/components/ui/Spinner';
 import { formatDate, formatPrice } from '@/utils/format';
 import { confirmAction } from '@/utils/confirm';
 import { notifySuccess, notifyError } from '@/utils/notify';
+import type { ErreurApi } from '@/utils/erreurApi';
 
 /* ── Config statuts ─────────────────────────────────────────────── */
 const STATUTS: Record<StatutPaiement, { label: string; color: string; bg: string; border: string; icon: React.ElementType }> = {
@@ -64,7 +65,7 @@ function StatutSelector({ paiement }: { paiement: Paiement }) {
       logger.action('Statut paiement changé', { paiement_id: paiement.id, nouveau_statut: statut });
       notifySuccess('Statut mis à jour');
     },
-    onError: (e: any) => {
+    onError: (e: ErreurApi) => {
       logger.error('Erreur changement statut paiement', { page: 'PaiementsPage', paiement_id: paiement.id, message: e?.response?.data?.message ?? e?.message });
       notifyError(e?.response?.data?.message ?? 'Erreur');
     },

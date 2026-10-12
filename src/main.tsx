@@ -5,11 +5,16 @@ import { RouterProvider } from 'react-router-dom';
 import { router } from '@/router';
 import { ErrorBoundary } from '@/lib/errorBoundary';
 import logger from '@/lib/logger';
+import { APP_VERSION } from '@/config/version';
 import 'sweetalert2/dist/sweetalert2.min.css';
 import './index.css';
 
+// Version servie, lisible dans le DOM (<html data-version="…">) : le test de
+// démarrage de la chaîne de déploiement la vérifie dans un vrai navigateur.
+document.documentElement.dataset.version = APP_VERSION;
+
 logger.info('Admin Nanei démarré', {
-  version: import.meta.env.VITE_APP_VERSION || '1.0.0',
+  version: APP_VERSION,
   env: import.meta.env.MODE,
 });
 

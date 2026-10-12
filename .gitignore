@@ -12,8 +12,9 @@ dist
 dist-ssr
 *.local
 
-# Variables d'environnement — jamais commitées, générées par le CI (voir
-# .github/workflows/deploy.yml) à partir du secret GitHub VITE_API_URL
+# Variables d'environnement locales — jamais commitées. En CI, VITE_API_URL
+# (secret GitHub) est passée directement à la construction, sans fichier .env
+# (voir .github/workflows/deploy.yml et docs/DEPLOIEMENT_ADMIN.md).
 .env
 
 # Editor directories and files

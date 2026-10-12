@@ -47,14 +47,20 @@ const statusBadge = (s: Colis['statut']) => ({
   livre:      <Badge variant="delivered">Livré</Badge>,
 }[s]);
 
+/**
+ * Réponse d'un compteur du back : selon la route (et sa version), le nombre
+ * est dans `total`, `data`, `nombre_colis` ou `nombre`.
+ */
+type ReponseCompteur = { total?: number; data?: number; nombre_colis?: number; nombre?: number };
+
 /* ── Page ──────────────────────────────────────────────────────────── */
 export default function DashboardPage() {
-  const { data: nbClients   = 0 } = useQuery({ queryKey: ['kpi-clients'],   queryFn: async () => { const d = (await clientsApi.count()).data as any; return d.total ?? d.nombre ?? 0; } });
-  const { data: nbAdmins    = 0 } = useQuery({ queryKey: ['kpi-admins'],    queryFn: async () => { const d = (await adminsApi.count()).data as any;  return d.data  ?? d.nombre ?? 0; } });
-  const { data: nbColis     = 0 } = useQuery({ queryKey: ['kpi-colis'],     queryFn: async () => { const d = (await colisApi.count()).data as any;   return d.nombre_colis ?? d.total ?? d.nombre ?? 0; } });
-  const { data: nbAttente   = 0 } = useQuery({ queryKey: ['kpi-attente'],   queryFn: async () => { const d = (await colisApi.countEnAttente()).data as any;  return d.nombre_colis ?? d.total ?? d.nombre ?? 0; } });
-  const { data: nbRecuperes = 0 } = useQuery({ queryKey: ['kpi-recuperes'], queryFn: async () => { const d = (await colisApi.countRecuperes()).data as any; return d.nombre_colis ?? d.total ?? d.nombre ?? 0; } });
-  const { data: nbLivres    = 0 } = useQuery({ queryKey: ['kpi-livres'],    queryFn: async () => { const d = (await colisApi.countLivres()).data as any;    return d.nombre_colis ?? d.total ?? d.nombre ?? 0; } });
+  const { data: nbClients   = 0 } = useQuery({ queryKey: ['kpi-clients'],   queryFn: async () => { const d = (await clientsApi.count()).data as ReponseCompteur; return d.total ?? d.nombre ?? 0; } });
+  const { data: nbAdmins    = 0 } = useQuery({ queryKey: ['kpi-admins'],    queryFn: async () => { const d = (await adminsApi.count()).data as ReponseCompteur;  return d.data  ?? d.nombre ?? 0; } });
+  const { data: nbColis     = 0 } = useQuery({ queryKey: ['kpi-colis'],     queryFn: async () => { const d = (await colisApi.count()).data as ReponseCompteur;   return d.nombre_colis ?? d.total ?? d.nombre ?? 0; } });
+  const { data: nbAttente   = 0 } = useQuery({ queryKey: ['kpi-attente'],   queryFn: async () => { const d = (await colisApi.countEnAttente()).data as ReponseCompteur;  return d.nombre_colis ?? d.total ?? d.nombre ?? 0; } });
+  const { data: nbRecuperes = 0 } = useQuery({ queryKey: ['kpi-recuperes'], queryFn: async () => { const d = (await colisApi.countRecuperes()).data as ReponseCompteur; return d.nombre_colis ?? d.total ?? d.nombre ?? 0; } });
+  const { data: nbLivres    = 0 } = useQuery({ queryKey: ['kpi-livres'],    queryFn: async () => { const d = (await colisApi.countLivres()).data as ReponseCompteur;    return d.nombre_colis ?? d.total ?? d.nombre ?? 0; } });
 
   const { data: colisBloqués = [] } = useQuery({
     queryKey: ['colis-bloques'],

@@ -1,54 +1,760 @@
-name: Deploy Admin to VPS
+# ═══════════════════════════════════════════════════════════════════════════
+#  Nanei — chaîne de déploiement de l'interface d'administration
+#  (https://admin.app-nanei.com, VPS + Nginx)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+#   1. Contrôles d'entrée ─┬─ 2a. Analyse (lint, types, scripts) ─┐
+#                          ├─ 2b. Tests ───────────────────────────┼─ 3. Construction & contrôle du livrable
+#                          ├─ 2c. Sécurité ────────────────────────┤               │
+#                          └─ 2d. Compatibilité du back ───────────┘   4. Test de démarrage (Nginx + navigateur)
+#                                                                                  │
+#                                       5. ✋ Approbation → mise en service atomique + vérification
+#                                          (retour arrière automatique si la vérification échoue)
+#                                                                                  │
+#                                                                             6. Bilan
+#
+#   Déployer       : push sur main (approbation requise sur l'environnement « production »)
+#   Essai à blanc  : Actions > « Admin — déploiement » > Run workflow (tout sauf la mise en service)
+#   Retour arrière : Actions > « Admin — retour arrière » (rollback-admin.yml)
+#   Procédure      : docs/DEPLOIEMENT_ADMIN.md
+
+name: Admin — déploiement
+run-name: >-
+  ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '🧪 Essai à blanc' || '🚀 Déploiement' }}
+  — ${{ github.ref_name }} @ ${{ github.sha }}
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Essai à blanc : tout est construit et vérifié, rien n'est mis en service"
+        type: boolean
+        default: true
+
+# Un seul déploiement à la fois, dans l'ordre, jamais interrompu en cours de
+# route (une mise en service coupée au milieu laisserait le serveur à vérifier).
+concurrency:
+  group: admin-deploiement
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  ADMIN_URL: https://admin.app-nanei.com
+  # Image Nginx du test de démarrage : épinglée par empreinte.
+  NGINX_IMAGE: nginx:1.28.3-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
 
 jobs:
-  deploy:
-    name: Build and Deploy
-    runs-on: ubuntu-latest
-
+  # ─────────────────────────────────────────────────────────────────────────
+  controles:
+    name: 1 · Contrôles d'entrée
+    runs-on: ubuntu-24.04 # figé : un changement de système se décide, il ne se subit pas
+    timeout-minutes: 5
+    outputs:
+      dry_run: ${{ steps.mode.outputs.dry_run }}
+      api_min: ${{ steps.api.outputs.api_min }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: 20
-          cache: 'npm'
+          fetch-depth: 0 # historique : origine du commit
+          persist-credentials: false # le jeton GitHub ne reste pas sur la machine
 
-      - name: Install dependencies
+      - name: Mode
+        id: mode
+        run: |
+          DRY_RUN="${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}"
+          echo "dry_run=$DRY_RUN" >> "$GITHUB_OUTPUT"
+          {
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "## 🧪 Essai à blanc"
+              echo "Toute la chaîne est exécutée (construction, contrôles, test de démarrage, compatibilité du back), mais **rien n'est mis en service**."
+            else
+              echo "## 🚀 Déploiement de l'admin vers ${ADMIN_URL}"
+            fi
+            echo ""
+            echo "### 🚦 Contrôles d'entrée"
+            echo ""
+            echo "| Contrôle | Résultat | |"
+            echo "|---|---|:---:|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Le commit est sur main
+        run: |
+          git fetch --quiet origin main
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "| Origine | commit \`${GITHUB_SHA::7}\` présent sur \`main\` | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Origine | commit \`${GITHUB_SHA::7}\` absent de \`main\` | ❌ |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Seul du code présent sur main peut être déployé : fusionnez d'abord sur main."
+            exit 1
+          fi
+
+      - name: Version d'API minimale exigée
+        id: api
+        run: |
+          API_MIN="$(grep -E '^export const API_VERSION_MIN = [0-9]+;$' src/config/apiVersion.ts | grep -oE '[0-9]+' || true)"
+          [ -n "$API_MIN" ] || { echo "::error::API_VERSION_MIN introuvable dans src/config/apiVersion.ts (entier littéral attendu)"; exit 1; }
+          echo "api_min=$API_MIN" >> "$GITHUB_OUTPUT"
+          echo "| API du back exigée | v$API_MIN au moins (src/config/apiVersion.ts) | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Secrets
+        env:
+          DRY_RUN: ${{ steps.mode.outputs.dry_run }}
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          [ -n "$VITE_API_URL" ] || { echo "::error::Secret GitHub manquant : VITE_API_URL (voir docs/DEPLOIEMENT_ADMIN.md)"; exit 1; }
+          if [[ ! "$VITE_API_URL" =~ ^https://[^/]+/nanei$ ]]; then
+            echo "| VITE_API_URL | format inattendu (https://<domaine>/nanei attendu) | ❌ |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::VITE_API_URL doit être de la forme https://<domaine>/nanei (sans / final)"
+            exit 1
+          fi
+          echo "| VITE_API_URL | présent, https://…/nanei | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$DRY_RUN" != "true" ]; then
+            for s in VPS_HOST VPS_USER VPS_SSH_KEY; do
+              [ -n "${!s}" ] || { echo "::error::Secret GitHub manquant : $s (voir docs/DEPLOIEMENT_ADMIN.md)"; exit 1; }
+            done
+            echo "| Accès serveur | VPS_HOST, VPS_USER, VPS_SSH_KEY présents | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  analyse:
+    name: 2a · Analyse (lint, types, scripts)
+    needs: controles
+    runs-on: ubuntu-24.04 # figé : un changement de système se décide, il ne se subit pas
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # le jeton GitHub ne reste pas sur la machine
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Dépendances
         run: npm ci
 
-      # Tests (Vitest) : un échec bloque la construction et le déploiement.
-      - name: Tests
-        run: npm test
+      - name: ESLint
+        run: |
+          set +e
+          npx eslint . --format json --output-file eslint.json
+          CODE=$?
+          set -e
+          COMPTES="$(node -e '
+            const r = require("./eslint.json");
+            console.log(r.reduce((s, f) => s + f.errorCount, 0) + " " + r.reduce((s, f) => s + f.warningCount, 0));
+          ' 2> /dev/null || echo "? ?")"
+          read -r ERREURS AVERTISSEMENTS <<< "$COMPTES"
+          if [ "$CODE" -eq 0 ]; then ICONE="✅"; else ICONE="❌"; fi
+          {
+            echo "### 🧹 Analyse"
+            echo ""
+            echo "| Contrôle | Résultat | |"
+            echo "|---|---|:---:|"
+            echo "| ESLint | $ERREURS erreur(s), $AVERTISSEMENTS avertissement(s) | $ICONE |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$CODE" -ne 0 ]; then
+            npx eslint . || true
+            echo "::error::ESLint a trouvé des erreurs (npm run lint en local)."
+            exit 1
+          fi
 
-      - name: Write .env
-        run: echo "VITE_API_URL=${{ secrets.VITE_API_URL }}" > .env
+      - name: Vérification des types (application, configuration et tests)
+        run: |
+          if npm run --silent typecheck; then
+            echo "| Types TypeScript | aucune erreur (application, tests, configuration) | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Types TypeScript | erreurs — voir le journal | ❌ |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Erreurs de types (npm run typecheck en local)."
+            exit 1
+          fi
 
-      - name: Build
+      - name: Scripts de déploiement (syntaxe + ShellCheck)
+        run: |
+          for f in deploy/*.sh deploy/tests/*.sh; do bash -n "$f"; done
+          # ShellCheck est préinstallé sur les machines GitHub ubuntu-24.04.
+          if shellcheck -x deploy/*.sh deploy/tests/*.sh; then
+            echo "| Scripts shell | syntaxe et ShellCheck sans remarque | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Scripts shell | remarques ShellCheck — voir le journal | ❌ |" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  tests:
+    name: 2b · Tests
+    needs: controles
+    runs-on: ubuntu-24.04 # figé : un changement de système se décide, il ne se subit pas
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # le jeton GitHub ne reste pas sur la machine
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Dépendances
+        run: npm ci
+
+      - name: Tests de l'application (Vitest)
+        run: npx vitest run --reporter=default --reporter=json --outputFile.json=vitest.json
+
+      - name: Tests des scripts de déploiement
+        run: |
+          set -o pipefail
+          {
+            bash deploy/tests/tester-mise-en-service.sh
+            bash deploy/tests/tester-verifications.sh
+          } 2>&1 | tee scripts.txt
+
+      - name: Rapport
+        if: always()
+        run: |
+          COMPTES="$(node -e '
+            const r = require("./vitest.json");
+            console.log(r.numPassedTests + " " + r.numFailedTests + " " + r.testResults.length);
+          ' 2> /dev/null || echo "? ? ?")"
+          read -r REUSSIS ECHOUES FICHIERS <<< "$COMPTES"
+          SCRIPTS="$(grep -E '^Résultat' scripts.txt 2> /dev/null | paste -sd ';' - || true)"
+          if [ "$ECHOUES" = "0" ]; then ICONE="✅ 0"; else ICONE="❌ $ECHOUES"; fi
+          {
+            echo "### 🧪 Tests"
+            echo ""
+            echo "| Suite | Réussis | Échoués |"
+            echo "|---|:---:|:---:|"
+            echo "| Application (Vitest, $FICHIERS fichiers) | ✅ $REUSSIS | $ICONE |"
+            echo "| Scripts de déploiement | ${SCRIPTS:-non exécutés} | |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  securite:
+    name: 2c · Sécurité
+    needs: controles
+    runs-on: ubuntu-24.04 # figé : un changement de système se décide, il ne se subit pas
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # le jeton GitHub ne reste pas sur la machine
+
+      - name: Secrets oubliés dans le code (Gitleaks)
+        run: |
+          {
+            echo "### 🔐 Sécurité"
+            echo ""
+            echo "| Contrôle | Résultat | |"
+            echo "|---|---|:---:|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # --user : le rapport est écrit avec les droits de la machine, pas de root.
+          if docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo" \
+               ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+               dir /repo --config /repo/.gitleaks.toml --redact --no-banner --verbose \
+               --report-format json --report-path /repo/gitleaks.json --exit-code 1; then
+            echo "| Secrets dans le code | aucun | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Secrets dans le code | secret(s) détecté(s) — détail ci-dessous | ❌ |" >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo ""
+              echo "| Fichier | Ligne | Règle |"
+              echo "|---|---:|---|"
+              jq -r '.[] | "| `\(.File | sub("^/repo/"; ""))` | \(.StartLine) | \(.RuleID) |"' gitleaks.json || true
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Un possible secret a été trouvé (fichier et ligne ci-dessus). Vrai secret : retirez-le du code ET changez-le, il est compromis. Faux positif : ajoutez une exception justifiée dans .gitleaks.toml."
+            exit 1
+          fi
+
+      # Bloquant : faille haute ou critique dans une dépendance EMBARQUÉE dans
+      # le site (dependencies). Les outils de construction (devDependencies) ne
+      # sont jamais servis aux navigateurs : OSV-Scanner les signale ci-dessous.
+      - name: Failles des dépendances embarquées (npm audit)
+        run: |
+          set +e
+          npm audit --omit=dev --audit-level=high > audit.txt 2>&1
+          CODE=$?
+          set -e
+          if [ "$CODE" -eq 0 ]; then
+            echo "| Failles hautes/critiques des dépendances embarquées (npm audit) | aucune | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Failles hautes/critiques des dépendances embarquées (npm audit) | trouvée(s) — détail ci-dessous | ❌ |" >> "$GITHUB_STEP_SUMMARY"
+            { echo ""; echo "<details><summary>Détail npm audit</summary>"; echo ""; echo '```'; cat audit.txt; echo '```'; echo "</details>"; } >> "$GITHUB_STEP_SUMMARY"
+            cat audit.txt
+            echo "::error::Faille haute ou critique dans une dépendance embarquée : mettez-la à jour (npm audit fix), ou documentez l'exception dans docs/DEPLOIEMENT_ADMIN.md."
+            exit 1
+          fi
+
+      # Non bloquant : toutes les dépendances (outils de construction compris).
+      # Une faille sans correctif disponible est signalée pour décision.
+      - name: Failles connues de toutes les dépendances (OSV-Scanner)
+        run: |
+          set +e
+          docker run --rm -v "$PWD:/src" \
+            ghcr.io/google/osv-scanner:v2.6.0@sha256:afd838850ac1a0fcc15ff4a041dc9ba11123c3f0d2666217a5f0fcf9222b55fa \
+            scan source --lockfile=/src/package-lock.json --format=markdown > osv.md 2> osv.log
+          CODE=$?
+          set -e
+          if [ "$CODE" -eq 0 ]; then
+            echo "| Failles connues de toutes les dépendances (OSV) | aucune | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$CODE" -eq 1 ]; then
+            echo "| Failles connues de toutes les dépendances (OSV) | signalée(s) — détail ci-dessous | ⚠️ |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Des failles connues touchent des dépendances (souvent des outils de construction) : voir le résumé."
+            { echo ""; echo "<details><summary>Détail OSV-Scanner</summary>"; echo ""; cat osv.md; echo "</details>"; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Failles connues de toutes les dépendances (OSV) | analyse impossible (code $CODE) | ⚠️ |" >> "$GITHUB_STEP_SUMMARY"
+            cat osv.log
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  compatibilite:
+    name: 2d · Compatibilité du back
+    needs: controles
+    runs-on: ubuntu-24.04 # figé : un changement de système se décide, il ne se subit pas
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # le jeton GitHub ne reste pas sur la machine
+
+      # Contrôlé tôt (échec rapide), puis de nouveau juste avant la bascule.
+      - name: Le back en ligne publie-t-il l'API exigée ?
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          API_MIN: ${{ needs.controles.outputs.api_min }}
+        run: |
+          echo "### 🔗 Compatibilité du back" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if bash deploy/verifier-back.sh "$VITE_API_URL" "$API_MIN" > back.txt; then
+            API_BACK="$(sed -n 's/^API_BACK=//p' back.txt)"
+            SHA_BACK="$(sed -n 's/^SHA_BACK=//p' back.txt)"
+            echo "✅ Le back en ligne expose l'API **v$API_BACK** (sha \`${SHA_BACK:0:7}\`) ; cette version de l'admin exige **v$API_MIN** au moins." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ **Back incompatible ou indisponible** — l'admin exige l'API **v$API_MIN**. Déployez d'abord le back (détail dans le journal de cette étape)." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  construction:
+    name: 3 · Construction & contrôle du livrable
+    needs: [controles, analyse, tests, securite, compatibilite]
+    runs-on: ubuntu-24.04 # figé : un changement de système se décide, il ne se subit pas
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # le jeton GitHub ne reste pas sur la machine
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Dépendances
+        run: npm ci
+
+      # Construit UNE seule fois : c'est cette archive, et elle seule, qui est
+      # testée (job 4) puis mise en service (job 5).
+      - name: Construction
+        env:
+          # Variables lues par Vite à la construction (aucun fichier .env écrit).
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_APP_VERSION: ${{ github.sha }}
         run: npm run build
 
-      - name: Deploy dist/ to VPS
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          source: "dist/*"
-          target: "/var/www/nanei-admin"
-          strip_components: 1
-          overwrite: true
+      - name: version.json
+        env:
+          API_MIN: ${{ needs.controles.outputs.api_min }}
+        run: bash deploy/ecrire-version.sh dist "$GITHUB_SHA" "$API_MIN"
 
-      - name: Verify deployment
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Contrôle du livrable
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          API_MIN: ${{ needs.controles.outputs.api_min }}
+        run: |
+          echo "### 📦 Livrable" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          set -o pipefail
+          bash deploy/controler-dist.sh dist "$GITHUB_SHA" "$VITE_API_URL" "$API_MIN" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Archive et somme de contrôle
+        run: |
+          mkdir -p livrables
+          ARCHIVE="livrables/nanei-admin-${GITHUB_SHA}.tar.gz"
+          # Archive reproductible : ordre, propriétaire et dates fixes.
+          DATE_COMMIT="$(git log -1 --format=%ct)"
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$DATE_COMMIT" \
+            -C dist -cf - . | gzip -n -9 > "$ARCHIVE"
+          cp dist/version.json livrables/version.json
+          (cd livrables && sha256sum ./*.tar.gz ./version.json > SHA256SUMS.txt)
+          {
+            echo ""
+            echo "Conservé **90 jours** (artefact \`admin-dist\` en bas de la page) — exactement ce qui sera mis en service."
+            echo ""
+            echo '```'
+            cat livrables/SHA256SUMS.txt
+            echo '```'
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: admin-dist
+          path: livrables/
+          retention-days: 90
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────
+  demarrage:
+    name: 4 · Test de démarrage (Nginx + navigateur)
+    needs: construction
+    runs-on: ubuntu-24.04 # figé : un changement de système se décide, il ne se subit pas
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # le jeton GitHub ne reste pas sur la machine
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: admin-dist
+          path: livrables
+
+      - name: Intégrité du livrable
+        run: (cd livrables && sha256sum --check --strict SHA256SUMS.txt)
+
+      # Comme sur le serveur : le script de mise en service installe l'archive
+      # (lien symbolique), puis Nginx la sert avec le fichier commun de production.
+      - name: Installation par le script de mise en service
+        run: |
+          mkdir -p "$RUNNER_TEMP/www"
+          ARCHIVE="livrables/nanei-admin-${GITHUB_SHA}.tar.gz"
+          SOMME="$(sha256sum "$ARCHIVE" | cut -d' ' -f1)"
+          NANEI_WWW="$RUNNER_TEMP/www" bash deploy/mettre-en-service.sh installer \
+            "$ARCHIVE" "$SOMME" "$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}"
+          ls -la "$RUNNER_TEMP/www"
+
+      - name: Nginx (configuration de production)
+        run: |
+          VOLUMES=(
+            -v "$PWD/deploy/nginx-admin-commun.conf:/etc/nginx/snippets/nanei-admin-commun.conf:ro"
+            -v "$PWD/deploy/tests/nginx-test.conf:/etc/nginx/conf.d/default.conf:ro"
+            -v "$RUNNER_TEMP/www:/var/www:ro"
+          )
+          docker run --rm "${VOLUMES[@]}" "$NGINX_IMAGE" nginx -t
+          docker run -d --name nginx-admin -p 8080:80 "${VOLUMES[@]}" "$NGINX_IMAGE"
+          for _ in $(seq 1 30); do
+            if curl -fs -o /dev/null http://localhost:8080/; then break; fi
+            sleep 1
+          done
+
+      - name: Réponses HTTP et en-têtes
+        run: |
+          U=http://localhost:8080
+          ECHECS=0
+          {
+            echo "### 🌐 Test de démarrage"
+            echo ""
+            echo "| Contrôle | Résultat | |"
+            echo "|---|---|:---:|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          bon() { echo "| $1 | $2 | ✅ |" >> "$GITHUB_STEP_SUMMARY"; }
+          mauvais() { echo "| $1 | $2 | ❌ |" >> "$GITHUB_STEP_SUMMARY"; echo "::error::$1 : $2"; ECHECS=$((ECHECS + 1)); }
+          entete() { curl -fsSI "$U$1" | tr -d '\r' | grep -i "^$2:" | cut -d' ' -f2- || true; }
+
+          if NANEI_ESSAIS=3 NANEI_PAUSE=2 bash deploy/verifier-en-ligne.sh "$U" "$GITHUB_SHA"; then
+            bon "version.json, accueil, route profonde, script" "sha \`${GITHUB_SHA::7}\` servi ; / et /nanei/admin/login en 200"
+          else
+            mauvais "version.json, accueil, route profonde, script" "échec (voir le journal)"
+          fi
+          for chemin in / /nanei/admin/login /version.json; do
+            CACHE="$(entete "$chemin" cache-control)"
+            if [ "$CACHE" = "no-cache" ]; then bon "Cache de $chemin" "\`$CACHE\`"; else mauvais "Cache de $chemin" "\`${CACHE:-absent}\` (no-cache attendu)"; fi
+          done
+          SCRIPT="$(curl -fs "$U/" | grep -o '/assets/[^"]*\.js' | head -1 || true)"
+          CACHE="$(entete "$SCRIPT" cache-control)"
+          if [[ "$CACHE" == *immutable* ]]; then bon "Cache de /assets/" "\`$CACHE\`"; else mauvais "Cache de /assets/" "\`${CACHE:-absent}\` (immutable attendu)"; fi
+          CODE="$(curl -s -o /dev/null -w '%{http_code}' "$U/assets/inexistant-0000.js" || true)"
+          if [ "$CODE" = "404" ]; then bon "Ressource absente" "404 (et non la page HTML)"; else mauvais "Ressource absente" "HTTP $CODE (404 attendu)"; fi
+          NOSNIFF="$(entete /nanei/admin/login x-content-type-options)"
+          FRAME="$(entete /nanei/admin/login x-frame-options)"
+          if [ "$NOSNIFF" = "nosniff" ] && [ "$FRAME" = "DENY" ]; then bon "En-têtes de sécurité" "nosniff, X-Frame-Options DENY"; else mauvais "En-têtes de sécurité" "absents"; fi
+          [ "$ECHECS" -eq 0 ]
+
+      # Le JavaScript s'exécute réellement : la page de connexion est rendue
+      # et <html data-version> porte le sha (écrit par src/main.tsx).
+      - name: Démarrage dans un vrai navigateur (Chrome sans interface)
+        run: |
+          google-chrome --headless=new --no-sandbox --disable-gpu --no-first-run \
+            --virtual-time-budget=15000 --dump-dom http://localhost:8080/nanei/admin/login > dom.html 2> chrome.log || true
+          if grep -q "data-version=\"$GITHUB_SHA\"" dom.html && grep -q 'type="password"' dom.html; then
+            echo "| Navigateur | l'application démarre, page de connexion affichée, version \`${GITHUB_SHA::7}\` | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Navigateur | l'application ne démarre pas (page de connexion absente) | ❌ |" >> "$GITHUB_STEP_SUMMARY"
+            head -c 3000 dom.html
+            tail -20 chrome.log
+            echo "::error::La page de connexion n'est pas rendue par le navigateur : erreur JavaScript au démarrage ?"
+            exit 1
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Journal Nginx
+        if: always()
+        run: docker logs nginx-admin 2>&1 | tail -50 || true
+
+  # ─────────────────────────────────────────────────────────────────────────
+  mise_en_service:
+    name: 5 · Approbation & mise en service
+    needs: [controles, construction, demarrage]
+    if: needs.controles.outputs.dry_run != 'true'
+    runs-on: ubuntu-24.04 # figé : un changement de système se décide, il ne se subit pas
+    timeout-minutes: 30
+    # ✋ L'environnement « production » exige l'approbation d'un relecteur
+    # (Settings > Environments) : le job attend le clic avant de démarrer.
+    environment:
+      name: production
+      url: ${{ env.ADMIN_URL }}
+    permissions:
+      contents: write # tag + Release GitHub du déploiement
+    outputs:
+      etat: ${{ steps.bilan.outputs.etat }}
+      version: ${{ steps.nom.outputs.version }}
+      precedente: ${{ steps.installation.outputs.precedente }}
+      release: ${{ steps.trace.outputs.release }}
+    env:
+      API_MIN: ${{ needs.controles.outputs.api_min }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # historique et tags : notes depuis le déploiement précédent
+          persist-credentials: false # le jeton GitHub ne reste pas sur la machine
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: admin-dist
+          path: livrables
+
+      - name: Intégrité du livrable
+        run: |
+          (cd livrables && sha256sum --check --strict SHA256SUMS.txt)
+          {
+            echo "### 🛫 Mise en service"
+            echo ""
+            echo "| Étape | Résultat | |"
+            echo "|---|---|:---:|"
+            echo "| Intégrité de l'archive | SHA-256 conforme | ✅ |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Nom de la version
+        id: nom
+        run: |
+          # <AAAAMMJJ>-<HHMMSS>-<sha court> : dossier sur le serveur ET tag git.
+          VERSION="$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "| Version | \`$VERSION\` | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+
+      # De nouveau juste avant la bascule : l'approbation a pu attendre des heures.
+      - name: Compatibilité du back (de nouveau)
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+        run: |
+          if bash deploy/verifier-back.sh "$VITE_API_URL" "$API_MIN" > back.txt; then
+            echo "| Back en ligne | API v$(sed -n 's/^API_BACK=//p' back.txt) ≥ v$API_MIN | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Back en ligne | incompatible ou indisponible — **déployer d'abord le back** | ❌ |" >> "$GITHUB_STEP_SUMMARY"
+            echo "ETAT=refus_back" >> "$GITHUB_ENV"
+            exit 1
+          fi
+
+      - name: Accès SSH au serveur
+        uses: ./.github/actions/acces-ssh
         with:
           host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
+          user: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          script: |
-            curl -f -I https://admin.app-nanei.com || exit 1
+          known-hosts: ${{ secrets.VPS_KNOWN_HOSTS }}
+          port: ${{ vars.VPS_PORT || '22' }}
+
+      - name: Envoi de l'archive et du script
+        run: |
+          DOSSIER="$(ssh nanei-vps 'mktemp -d /tmp/nanei-admin-deploiement.XXXXXX')"
+          [[ "$DOSSIER" =~ ^/tmp/nanei-admin-deploiement\.[A-Za-z0-9]+$ ]] || { echo "::error::Dossier temporaire inattendu sur le serveur : $DOSSIER"; exit 1; }
+          echo "DOSSIER_DISTANT=$DOSSIER" >> "$GITHUB_ENV"
+          scp -q "livrables/nanei-admin-${GITHUB_SHA}.tar.gz" deploy/mettre-en-service.sh "nanei-vps:$DOSSIER/"
+          echo "| Envoi | archive + script dans un dossier temporaire du serveur | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Installation et bascule atomique
+        id: installation
+        env:
+          VERSION: ${{ steps.nom.outputs.version }}
+        run: |
+          SOMME="$(awk -v f="./nanei-admin-${GITHUB_SHA}.tar.gz" '$2 == f {print $1}' livrables/SHA256SUMS.txt)"
+          [[ "$SOMME" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::Somme SHA-256 de l'archive introuvable dans SHA256SUMS.txt"; exit 1; }
+          # Le serveur revérifie la somme avant d'extraire.
+          set +e
+          # shellcheck disable=SC2029 # expansion locale voulue : valeurs contrôlées avant l'envoi au serveur
+          ssh nanei-vps "bash '$DOSSIER_DISTANT/mettre-en-service.sh' installer '$DOSSIER_DISTANT/nanei-admin-${GITHUB_SHA}.tar.gz' '$SOMME' '$VERSION'" > installation.txt
+          CODE=$?
+          set -e
+          cat installation.txt
+          if [ "$CODE" -ne 0 ]; then
+            echo "| Installation | refusée par le serveur — version en ligne inchangée | ❌ |" >> "$GITHUB_STEP_SUMMARY"
+            echo "ETAT=echec_installation" >> "$GITHUB_ENV"
+            echo "::error::La mise en service a échoué AVANT la bascule : la version en ligne n'a pas changé (détail dans le journal)."
+            exit 1
+          fi
+          PRECEDENTE="$(sed -n 's/^VERSION_PRECEDENTE=//p' installation.txt)"
+          echo "precedente=$PRECEDENTE" >> "$GITHUB_OUTPUT"
+          echo "VERSION_PRECEDENTE=$PRECEDENTE" >> "$GITHUB_ENV"
+          echo "ETAT=basculee" >> "$GITHUB_ENV"
+          echo "| Bascule | \`${PRECEDENTE:-(aucune)}\` → \`$VERSION\` | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Vérification en ligne (retour arrière automatique si échec)
+        env:
+          VERSION: ${{ steps.nom.outputs.version }}
+        run: |
+          if bash deploy/verifier-en-ligne.sh "$ADMIN_URL" "$GITHUB_SHA"; then
+            echo "| Vérification | ${ADMIN_URL}/version.json annonce \`${GITHUB_SHA::7}\`, routes en 200 | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+            echo "ETAT=deployee" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "| Vérification | la version en ligne n'est pas \`${GITHUB_SHA::7}\` ou une route ne répond pas | ❌ |" >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$VERSION_PRECEDENTE" ]; then
+            echo "ETAT=echec_sans_retour" >> "$GITHUB_ENV"
+            echo "::error::Vérification en ligne échouée et AUCUNE version précédente sur le serveur : intervention manuelle requise (docs/DEPLOIEMENT_ADMIN.md)."
+            exit 1
+          fi
+
+          echo "::warning::Vérification échouée : retour arrière automatique vers $VERSION_PRECEDENTE"
+          # shellcheck disable=SC2029 # expansion locale voulue : valeurs contrôlées avant l'envoi au serveur
+          if ssh nanei-vps "bash '$DOSSIER_DISTANT/mettre-en-service.sh' revenir '$VERSION_PRECEDENTE' --abandonner '$VERSION'" > retour.txt; then
+            cat retour.txt
+            SHA_PRECEDENT="$(sed -n 's/^SHA_ACTUEL=//p' retour.txt)"
+            # SHA vide : version initiale (sans version.json), seules les routes sont vérifiées.
+            if bash deploy/verifier-en-ligne.sh "$ADMIN_URL" "$SHA_PRECEDENT"; then
+              echo "| Retour arrière | \`$VERSION_PRECEDENTE\` de nouveau en ligne et vérifiée | ↩️ |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| Retour arrière | lien rebasculé vers \`$VERSION_PRECEDENTE\`, mais la vérification échoue aussi : Nginx, DNS ou réseau ? | ❌ |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo "ETAT=retour_arriere" >> "$GITHUB_ENV"
+            echo "::error::La nouvelle version ne répondait pas correctement : retour arrière effectué vers $VERSION_PRECEDENTE. Rien n'est déployé ; voir le journal de vérification."
+          else
+            echo "| Retour arrière | ÉCHEC — intervention manuelle requise | ❌ |" >> "$GITHUB_STEP_SUMMARY"
+            echo "ETAT=echec_retour_arriere" >> "$GITHUB_ENV"
+            echo "::error::Vérification échouée ET retour arrière impossible : lancez « Admin — retour arrière » ou intervenez sur le serveur (docs/DEPLOIEMENT_ADMIN.md)."
+          fi
+          exit 1
+
+      - name: Trace du déploiement (tag + Release GitHub)
+        id: trace
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.nom.outputs.version }}
+        run: |
+          TAG="admin-v${VERSION}"
+          PRECEDENT_TAG="$(git tag --list 'admin-v*' --sort=-creatordate | head -1)"
+          {
+            echo "Mise en service de l'admin sur ${ADMIN_URL}"
+            echo ""
+            echo "- Version : \`$VERSION\` (commit ${GITHUB_SHA})"
+            echo "- Version remplacée sur le serveur : \`${VERSION_PRECEDENTE:-aucune}\`"
+            echo "- API du back exigée : v${API_MIN}"
+            echo "- Exécution : ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo ""
+            echo "### Changements"
+            echo ""
+            if [ -n "$PRECEDENT_TAG" ]; then
+              git log --no-merges --format='- %s (%h)' "${PRECEDENT_TAG}..${GITHUB_SHA}" | head -50
+            else
+              git log --no-merges --format='- %s (%h)' -20 "$GITHUB_SHA"
+            fi
+            echo ""
+            echo "Retour arrière : Actions > « Admin — retour arrière » (version \`${VERSION_PRECEDENTE:-précédente}\`)."
+          } > notes.md
+          gh release create "$TAG" livrables/* \
+            --target "$GITHUB_SHA" \
+            --title "Admin $VERSION" \
+            --notes-file notes.md
+          URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+          echo "release=$URL" >> "$GITHUB_OUTPUT"
+          echo "| Trace | tag \`$TAG\` — $URL | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: État final
+        id: bilan
+        if: always()
+        run: |
+          echo "etat=${ETAT:-echec_avant_envoi}" >> "$GITHUB_OUTPUT"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Nettoyage
+        if: always()
+        run: |
+          if [ -n "${DOSSIER_DISTANT:-}" ]; then
+            # shellcheck disable=SC2029 # expansion locale voulue : valeurs contrôlées avant l'envoi au serveur
+            ssh nanei-vps "rm -rf -- '$DOSSIER_DISTANT'" || echo "::warning::Dossier temporaire $DOSSIER_DISTANT non supprimé sur le serveur."
+          fi
+          rm -f ~/.ssh/nanei_deploy ~/.ssh/config
+
+  # ─────────────────────────────────────────────────────────────────────────
+  bilan:
+    name: 6 · Bilan
+    if: always()
+    needs: [controles, analyse, tests, securite, compatibilite, construction, demarrage, mise_en_service]
+    runs-on: ubuntu-24.04 # figé : un changement de système se décide, il ne se subit pas
+    timeout-minutes: 5
+    steps:
+      - name: Bilan
+        env:
+          DRY_RUN: ${{ needs.controles.outputs.dry_run }}
+          ETAT: ${{ needs.mise_en_service.outputs.etat }}
+          VERSION: ${{ needs.mise_en_service.outputs.version }}
+          PRECEDENTE: ${{ needs.mise_en_service.outputs.precedente }}
+          RELEASE: ${{ needs.mise_en_service.outputs.release }}
+          R_CONTROLES: ${{ needs.controles.result }}
+          R_ANALYSE: ${{ needs.analyse.result }}
+          R_TESTS: ${{ needs.tests.result }}
+          R_SECURITE: ${{ needs.securite.result }}
+          R_COMPAT: ${{ needs.compatibilite.result }}
+          R_CONSTRUCTION: ${{ needs.construction.result }}
+          R_DEMARRAGE: ${{ needs.demarrage.result }}
+          R_MISE: ${{ needs.mise_en_service.result }}
+        run: |
+          SANS_TRACE="tag non créé, voir l'étape « Trace »"
+          icone() { case "$1" in success) echo "✅";; failure) echo "❌";; cancelled) echo "⏹️";; skipped) echo "⏭️";; *) echo "❔";; esac; }
+          {
+            echo "## 📋 Bilan"
+            echo ""
+            echo "| Étape | Résultat |"
+            echo "|---|:---:|"
+            echo "| 1 · Contrôles d'entrée | $(icone "$R_CONTROLES") |"
+            echo "| 2a · Analyse (lint, types, scripts) | $(icone "$R_ANALYSE") |"
+            echo "| 2b · Tests | $(icone "$R_TESTS") |"
+            echo "| 2c · Sécurité | $(icone "$R_SECURITE") |"
+            echo "| 2d · Compatibilité du back | $(icone "$R_COMPAT") |"
+            echo "| 3 · Construction & contrôle du livrable | $(icone "$R_CONSTRUCTION") |"
+            echo "| 4 · Test de démarrage | $(icone "$R_DEMARRAGE") |"
+            echo "| 5 · Approbation & mise en service | $(icone "$R_MISE") |"
+            echo ""
+            if [ "$DRY_RUN" = "true" ]; then
+              if [ "$R_DEMARRAGE" = "success" ]; then
+                echo "🧪 **Essai à blanc réussi** — le commit \`${GITHUB_SHA::7}\` est prêt à être mis en service. Rien n'a été modifié sur le serveur."
+              else
+                echo "🧪 **Essai à blanc en échec** — ouvrez l'étape en ❌ pour le détail."
+              fi
+            else
+              case "$ETAT" in
+                deployee) echo "🎉 **\`$VERSION\` en ligne** sur ${ADMIN_URL} et vérifiée (remplace \`${PRECEDENTE:-aucune}\`). Trace : ${RELEASE:-$SANS_TRACE}" ;;
+                retour_arriere) echo "↩️ **Retour arrière automatique** : la nouvelle version ne répondait pas correctement, \`$PRECEDENTE\` est de nouveau en ligne. Voir l'étape « Vérification en ligne »." ;;
+                echec_retour_arriere|echec_sans_retour) echo "🚨 **Intervention requise** : la vérification a échoué et le retour arrière automatique n'a pas abouti. Lancez « Admin — retour arrière » ou suivez docs/DEPLOIEMENT_ADMIN.md." ;;
+                refus_back) echo "🛑 **Refusé : le back en ligne n'expose pas l'API exigée.** Déployez d'abord le back, puis relancez ce workflow." ;;
+                echec_installation) echo "🛑 **Installation refusée par le serveur** — la version en ligne n'a pas changé." ;;
+                *) echo "🛑 **Rien n'a été mis en service.** Ouvrez l'étape en ❌ pour le détail — dépannage : docs/DEPLOIEMENT_ADMIN.md." ;;
+              esac
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

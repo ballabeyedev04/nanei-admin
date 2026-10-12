@@ -17,6 +17,7 @@ import { notifySuccess, notifyError } from '@/utils/notify';
 import { formatDate } from '@/utils/format';
 import { confirmDeactivate, confirmActivate } from '@/utils/confirm';
 import type { User as UserType } from '@/types';
+import type { ErreurApi } from '@/utils/erreurApi';
 
 interface FormData { nom: string; prenom: string; email: string; mot_de_passe: string; telephone: string; adresse: string; }
 const EMPTY: FormData = { nom: '', prenom: '', email: '', mot_de_passe: '', telephone: '', adresse: '' };
@@ -86,7 +87,7 @@ export default function AdminsPage() {
 
   const createMut = useMutation({
     mutationFn: adminsApi.create,
-    onSuccess: (_, vars: any) => {
+    onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['admins'] });
       qc.invalidateQueries({ queryKey: ['admins-list'] });
       qc.invalidateQueries({ queryKey: ['kpi-admins'] });
@@ -95,7 +96,7 @@ export default function AdminsPage() {
       setShowCreate(false);
       setForm(EMPTY);
     },
-    onError: (e: any) => {
+    onError: (e: ErreurApi) => {
       logger.error('Erreur création admin', { page: 'AdminsPage', message: e?.response?.data?.message ?? e?.message });
       notifyError(e?.response?.data?.message ?? 'Erreur lors de la création');
     },
@@ -109,7 +110,7 @@ export default function AdminsPage() {
       logger.action(`Admin ${action === 'activate' ? 'activé' : 'désactivé'}`, { admin_id: id });
       notifySuccess(action === 'activate' ? 'Admin activé' : 'Admin désactivé');
     },
-    onError: (e: any) => {
+    onError: (e: ErreurApi) => {
       logger.error('Erreur toggle admin', { page: 'AdminsPage', message: e?.response?.data?.message ?? e?.message });
       notifyError(e?.response?.data?.message ?? 'Erreur');
     },

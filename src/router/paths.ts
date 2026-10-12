@@ -1,0 +1,20 @@
+/** Routes de l'interface d'administration (toutes sous /nanei/admin). */
+export const PATHS = {
+  LOGIN:            '/nanei/admin/login',
+  FORGOT_PASSWORD:  '/nanei/admin/forgot-password',
+  RESET_PASSWORD:   '/nanei/admin/reset-password',
+  DASHBOARD:        '/nanei/admin/dashboard',
+  ADMINS:           '/nanei/admin/gestion-admin',
+  CLIENTS:          '/nanei/admin/gestion-client',
+  COLIS:            '/nanei/admin/gestion-colis',
+  ETIQUETTES:       '/nanei/admin/etiquettes',
+  PAYS:             '/nanei/admin/gestion-pays',
+  MESSAGES:         '/nanei/admin/gestion-messages',
+  PAIEMENTS:        '/nanei/admin/paiements',
+  RECLAMATIONS:     '/nanei/admin/reclamations',
+  AVIS:             '/nanei/admin/avis',
+  AUDIT_LOGS:       '/nanei/admin/audit-logs',
+  RAPPORTS:         '/nanei/admin/rapports',
+  EXPORT:           '/nanei/admin/export',
+  PROFILE:          '/nanei/admin/profile',
+};

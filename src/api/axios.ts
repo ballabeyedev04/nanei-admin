@@ -1,7 +1,7 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import axios, { type AxiosRequestConfig } from 'axios';
 import { useAuthStore } from '@/store/authStore';
 import logger from '@/lib/logger';
+import { erreurApi } from '@/utils/erreurApi';
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? '/nanei';
 
@@ -78,8 +78,8 @@ async function renouvelerSansConcurrence(jetonEchoue: string | null): Promise<st
     useAuthStore.getState().setTokens(token, nouveau);
     logger.debug('Jeton admin renouvelé');
     return token;
-  } catch (err: any) {
-    const status = err?.response?.status;
+  } catch (err) {
+    const status = erreurApi(err).response?.status;
     logger.warn('Renouvellement du jeton refusé', { status });
     if (status === 400 || status === 401) {
       // Refus : peut-être parce qu'un autre onglet vient de faire tourner le
@@ -102,9 +102,12 @@ async function renouvelerSansConcurrence(jetonEchoue: string | null): Promise<st
 export function renouvelerJeton(jetonEchoue: string | null = useAuthStore.getState().token): Promise<string | null> {
   if (refreshEnCours) return refreshEnCours;
 
-  const verrous = typeof navigator !== 'undefined' ? (navigator as any).locks : undefined;
+  // Web Locks absent de certains navigateurs (et de jsdom) : d'où le type élargi.
+  const verrous: LockManager | undefined = typeof navigator !== 'undefined' ? navigator.locks : undefined;
   const tache = verrous?.request
-    ? (verrous.request('nanei-admin-refresh', () => renouvelerSansConcurrence(jetonEchoue)) as Promise<string | null>)
+    // lib.dom type le résultat Promise<Promise<…>> (il est en réalité aplati) ;
+    // Promise.resolve rend le bon type et renvoie la même promesse native.
+    ? Promise.resolve(verrous.request('nanei-admin-refresh', () => renouvelerSansConcurrence(jetonEchoue)))
     : renouvelerSansConcurrence(jetonEchoue);
 
   refreshEnCours = tache.finally(() => {
@@ -149,7 +152,7 @@ api.interceptors.response.use(
       config._rejoue = true;
       // Jeton avec lequel la requête a échoué (pour détecter qu'un autre
       // onglet a déjà renouvelé la session).
-      const entete = String((config.headers as any)?.Authorization ?? '');
+      const entete = String(config.headers?.Authorization ?? '');
       const jetonEchoue = entete.startsWith('Bearer ') ? entete.slice(7) : null;
       let nouveauJeton: string | null;
       try {

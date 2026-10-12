@@ -1,0 +1,81 @@
+# Accès SSH au serveur (VPS) pour deploy.yml et rollback-admin.yml.
+#
+# Prépare ~/.ssh pour l'alias « nanei-vps » : clé privée, empreinte du
+# serveur vérifiée (StrictHostKeyChecking), connexions non interactives.
+# La clé est supprimée par l'étape « Nettoyage » des workflows, et de toute
+# façon détruite avec la machine GitHub à la fin du job.
+name: Accès SSH au serveur Nanei
+description: Configure l'alias SSH « nanei-vps » à partir des secrets du dépôt.
+
+inputs:
+  host:
+    description: Adresse du serveur (secret VPS_HOST)
+    required: true
+  user:
+    description: Utilisateur de déploiement (secret VPS_USER)
+    required: true
+  key:
+    description: Clé privée SSH (secret VPS_SSH_KEY)
+    required: true
+  known-hosts:
+    description: >-
+      Lignes known_hosts du serveur (secret VPS_KNOWN_HOSTS, recommandé). Vide :
+      l'empreinte est lue à la première connexion (ssh-keyscan) et affichée
+      dans le résumé, avec un avertissement.
+    required: false
+    default: ""
+  port:
+    description: Port SSH
+    required: false
+    default: "22"
+
+runs:
+  using: composite
+  steps:
+    - name: Configuration SSH
+      shell: bash
+      env:
+        HOTE: ${{ inputs.host }}
+        UTILISATEUR: ${{ inputs.user }}
+        CLE: ${{ inputs.key }}
+        HOTES_CONNUS: ${{ inputs.known-hosts }}
+        PORT: ${{ inputs.port }}
+      run: |
+        set -euo pipefail
+        for v in HOTE UTILISATEUR CLE; do
+          [ -n "${!v}" ] || { echo "::error::Secret GitHub manquant pour l'accès SSH ($v) : voir docs/DEPLOIEMENT_ADMIN.md"; exit 1; }
+        done
+        [[ "$PORT" =~ ^[0-9]+$ ]] || { echo "::error::Port SSH invalide : $PORT"; exit 1; }
+        install -d -m 700 ~/.ssh
+        # tr -d '\r' : une clé collée depuis Windows reste utilisable.
+        printf '%s\n' "$CLE" | tr -d '\r' > ~/.ssh/nanei_deploy
+        chmod 600 ~/.ssh/nanei_deploy
+
+        if [ -n "$HOTES_CONNUS" ]; then
+          printf '%s\n' "$HOTES_CONNUS" | tr -d '\r' > ~/.ssh/known_hosts_nanei
+          echo "| Empreinte du serveur | vérifiée (secret VPS_KNOWN_HOSTS) | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+        else
+          ssh-keyscan -T 20 -p "$PORT" "$HOTE" 2> /dev/null > ~/.ssh/known_hosts_nanei || true
+          [ -s ~/.ssh/known_hosts_nanei ] || { echo "::error::Serveur $HOTE:$PORT injoignable en SSH (ssh-keyscan)."; exit 1; }
+          EMPREINTES="$(ssh-keygen -lf ~/.ssh/known_hosts_nanei | awk '{print $2" ("$4")"}' | paste -sd ' ' -)"
+          echo "::warning::Secret VPS_KNOWN_HOSTS absent : empreinte du serveur acceptée sans vérification ($EMPREINTES). Voir docs/DEPLOIEMENT_ADMIN.md pour l'ajouter."
+          echo "| Empreinte du serveur | **non vérifiée** (VPS_KNOWN_HOSTS absent) : $EMPREINTES | ⚠️ |" >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        cat > ~/.ssh/config <<EOF
+        Host nanei-vps
+          HostName $HOTE
+          User $UTILISATEUR
+          Port $PORT
+          IdentityFile ~/.ssh/nanei_deploy
+          IdentitiesOnly yes
+          UserKnownHostsFile ~/.ssh/known_hosts_nanei
+          StrictHostKeyChecking yes
+          BatchMode yes
+          ConnectTimeout 20
+          ServerAliveInterval 15
+          ServerAliveCountMax 4
+        EOF
+        chmod 600 ~/.ssh/config
+        ssh nanei-vps true || { echo "::error::Connexion SSH refusée par $HOTE (clé, utilisateur ou empreinte) : voir docs/DEPLOIEMENT_ADMIN.md"; exit 1; }
+        echo "| Connexion SSH | établie avec la clé de déploiement | ✅ |" >> "$GITHUB_STEP_SUMMARY"

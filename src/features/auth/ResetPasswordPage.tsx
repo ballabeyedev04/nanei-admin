@@ -2,8 +2,9 @@ import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Eye, EyeOff, Loader2, CheckCircle, AlertCircle, KeyRound } from 'lucide-react';
 import { authApi } from '@/api/auth';
-import { PATHS } from '@/router';
+import { PATHS } from '@/router/paths';
 import { useAuthStore } from '@/store/authStore';
+import { erreurApi } from '@/utils/erreurApi';
 
 /**
  * Règles de mot de passe identiques à la politique backend
@@ -57,7 +58,8 @@ export default function ResetPasswordPage() {
       } else {
         setFieldError(res.data.message ?? 'Une erreur est survenue.');
       }
-    } catch (err: any) {
+    } catch (exception) {
+      const err = erreurApi(exception);
       const msg: string = err?.response?.data?.message ?? '';
       // Token invalide ou expiré → on bascule sur l'état dédié
       if (

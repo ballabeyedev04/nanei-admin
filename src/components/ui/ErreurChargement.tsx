@@ -1,6 +1,5 @@
 import { AlertCircle } from 'lucide-react';
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
+import { erreurApi } from '@/utils/erreurApi';
 
 /**
  * Affiché quand le chargement d'une liste échoue (500, 429, réseau…).
@@ -8,7 +7,7 @@ import { AlertCircle } from 'lucide-react';
  * on ne distinguait pas une panne d'une absence de données.
  */
 export function ErreurChargement({ erreur, onRetry }: { erreur?: unknown; onRetry?: () => void }) {
-  const reponse = (erreur as any)?.response;
+  const reponse = erreurApi(erreur).response;
   const detail =
     reponse?.status === 429
       ? 'Trop de requêtes : réessayez dans quelques minutes.'

@@ -1,0 +1,10 @@
+# Recherche de secrets (.github/workflows/deploy.yml, job « 2c · Sécurité »).
+# Règles par défaut de Gitleaks, plus les exceptions justifiées ci-dessous.
+# Une exception ne se met que pour un FAUX positif, avec sa justification.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Dossier interne de git (objets, configuration) : pas du code. Le checkout de GitHub Actions peut y écrire un jeton d'accès temporaire."
+paths = ['''(^|/)\.git/''']

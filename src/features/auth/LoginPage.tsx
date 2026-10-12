@@ -3,9 +3,10 @@ import { useNavigate, Link } from 'react-router-dom';
 import { Eye, EyeOff, Loader2, ArrowRight } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { authApi } from '@/api/auth';
-import { PATHS } from '@/router';
+import { PATHS } from '@/router/paths';
 import { notifySuccess, notifyError } from '@/utils/notify';
 import logger from '@/lib/logger';
+import { erreurApi } from '@/utils/erreurApi';
 
 export default function LoginPage() {
   const [email, setEmail]       = useState('');
@@ -34,7 +35,8 @@ export default function LoginPage() {
       logger.action('Admin connecté', { admin_id: utilisateur.id, email: logger.maskEmail(utilisateur.email) });
       notifySuccess(`Bienvenue, ${utilisateur.prenom} !`);
       navigate(PATHS.DASHBOARD);
-    } catch (err: any) {
+    } catch (exception) {
+      const err = erreurApi(exception);
       logger.error('Erreur connexion admin', { page: 'LoginPage', message: err?.response?.data?.message ?? err?.message });
       notifyError(err?.response?.data?.message ?? 'Identifiants incorrects');
     } finally {

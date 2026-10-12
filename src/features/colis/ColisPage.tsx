@@ -15,6 +15,7 @@ import { formatDate, formatPrice } from '@/utils/format';
 import { confirmAction } from '@/utils/confirm';
 import { notifySuccess, notifyError } from '@/utils/notify';
 import type { Colis, PreuveLivraison } from '@/types';
+import { erreurApi, type ErreurApi } from '@/utils/erreurApi';
 
 type Filter = 'all' | 'en_attente' | 'recupere' | 'livre';
 
@@ -162,8 +163,9 @@ function PreuveLivraisonModal({ colis, onClose }: { colis: Colis; onClose: () =>
       notifySuccess(remplacer ? 'Preuve de livraison remplacée' : 'Preuve de livraison ajoutée');
       await qc.invalidateQueries({ queryKey: ['preuve', colis.id] });
       refetch();
-    } catch (err: any) {
-      logger.error('Erreur upload preuve de livraison', { page: 'ColisPage', colis_id: colis.id, message: (err as Error).message });
+    } catch (exception) {
+      const err = erreurApi(exception);
+      logger.error('Erreur upload preuve de livraison', { page: 'ColisPage', colis_id: colis.id, message: err.message });
       notifyError(err?.response?.data?.message ?? "Erreur lors de l'upload de la preuve");
       if (err?.response?.status === 409) refetch();
     } finally {
@@ -333,7 +335,7 @@ export default function ColisPage() {
       logger.action('Statut colis changé', { colis_id: id, nouveau_statut: action });
       notifySuccess(`Statut mis à jour : ${labels[action]}`);
     },
-    onError: (e: any) => {
+    onError: (e: ErreurApi) => {
       logger.error('Erreur changement statut colis', { page: 'ColisPage', message: e?.response?.data?.message ?? e?.message });
       // 409 : transition refusée par le back (colis livré, déjà dans ce statut…) — on affiche son message.
       notifyError(e?.response?.data?.message ?? 'Erreur');

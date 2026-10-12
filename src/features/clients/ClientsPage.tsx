@@ -13,6 +13,7 @@ import { formatDate } from '@/utils/format';
 import { confirmDeactivate, confirmActivate } from '@/utils/confirm';
 import { notifySuccess, notifyError } from '@/utils/notify';
 import type { User } from '@/types';
+import type { ErreurApi } from '@/utils/erreurApi';
 
 export default function ClientsPage() {
   const qc = useQueryClient();
@@ -44,7 +45,7 @@ export default function ClientsPage() {
       logger.action(`Client ${action === 'activate' ? 'activé' : 'désactivé'}`, { client_id: id });
       notifySuccess(action === 'activate' ? 'Client activé' : 'Client désactivé');
     },
-    onError: (e: any) => {
+    onError: (e: ErreurApi) => {
       logger.error('Erreur toggle client', { page: 'ClientsPage', message: e?.response?.data?.message ?? e?.message });
       notifyError(e?.response?.data?.message ?? 'Erreur');
     },

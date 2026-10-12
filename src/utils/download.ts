@@ -1,3 +1,5 @@
+import { erreurApi, type CorpsErreurApi } from './erreurApi';
+
 /**
  * Déclenche le téléchargement d'un Blob reçu depuis l'API.
  *
@@ -22,9 +24,9 @@ export function downloadBlob(blob: Blob, filename: string) {
  * le lire pour afficher la vraie raison au lieu d'un texte fixe.
  */
 export async function messageErreurTelechargement(err: unknown, parDefaut: string): Promise<string> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const reponse = (err as any)?.response;
-  const corps = reponse?.data;
+  const reponse = erreurApi(err).response;
+  // En mode blob, le corps est un Blob ; sinon l'objet JSON { message }.
+  const corps: Blob | CorpsErreurApi | undefined = reponse?.data;
   try {
     if (corps instanceof Blob) {
       const texte = await corps.text();

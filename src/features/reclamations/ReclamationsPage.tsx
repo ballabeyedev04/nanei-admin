@@ -11,6 +11,7 @@ import logger from '@/lib/logger';
 import { formatDate } from '@/utils/format';
 import { notifySuccess, notifyError } from '@/utils/notify';
 import type { Reclamation, StatutReclamation, TypeReclamation } from '@/types';
+import type { ErreurApi } from '@/utils/erreurApi';
 
 /* ── Config badges ─────────────────────────────────────────────────── */
 const STATUT_CONFIG: Record<StatutReclamation, { label: string; color: string; bg: string; border: string }> = {
@@ -125,7 +126,7 @@ function ReclamationModal({
       notifySuccess('Réclamation mise à jour');
       onClose();
     },
-    onError: (e: any) => {
+    onError: (e: ErreurApi) => {
       logger.error('Erreur mise à jour réclamation', { page: 'ReclamationsPage', reclamation_id: reclamation.id, message: e?.response?.data?.message ?? e?.message });
       notifyError(e?.response?.data?.message ?? 'Erreur');
     },

@@ -19,6 +19,7 @@ import { formatPrice } from '@/utils/format';
 import { confirmAction } from '@/utils/confirm';
 import { notifySuccess, notifyError } from '@/utils/notify';
 import type { Country } from '@/types';
+import type { ErreurApi } from '@/utils/erreurApi';
 
 type Tab = 'countries' | 'shipping' | 'service' | 'taux';
 
@@ -78,6 +79,26 @@ function ModalActions({ onCancel, pending, isEdit }: { onCancel: () => void; pen
   );
 }
 
+/* ── Ligne « liste vide » et en-tête de colonne des tableaux ─────────── */
+function EmptyState({ icon: Icon, text }: { icon: React.ElementType; text: string }) {
+  return (
+    <tr><td colSpan={10} className="px-5 py-14 text-center">
+      <div className="flex flex-col items-center gap-2.5">
+        <div className="w-12 h-12 rounded-2xl bg-gray-100 flex items-center justify-center">
+          <Icon size={22} className="text-gray-300" />
+        </div>
+        <p className="text-sm text-gray-400 font-medium">{text}</p>
+      </div>
+    </td></tr>
+  );
+}
+
+function Th({ children }: { children: string }) {
+  return (
+    <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">{children}</th>
+  );
+}
+
 /* ═══════════════════════════════════════════════════════════════════ */
 /**
  * Nombre saisi au clavier : accepte la virgule française (« 4,75 ») et les
@@ -129,7 +150,9 @@ export default function CountriesPage() {
   });
 
   const countryMut = useMutation({
-    mutationFn: (d: typeof countryForm) =>
+    // Résultat non utilisé : `unknown` réunit les deux réponses (création /
+    // modification), typées différemment par axios ≥ 1.20.
+    mutationFn: (d: typeof countryForm): Promise<unknown> =>
       editCountry ? countriesApi.update(editCountry.id, d) : countriesApi.create(d),
     onSuccess: (_, d) => {
       qc.invalidateQueries({ queryKey: ['countries'] });
@@ -137,7 +160,7 @@ export default function CountriesPage() {
       notifySuccess(editCountry ? 'Pays mis à jour' : 'Pays créé');
       setShowCountryModal(false); setEditCountry(null); setCountryForm({ name: '', code: '', isActive: true });
     },
-    onError: (e: any) => {
+    onError: (e: ErreurApi) => {
       logger.error('Erreur mutation pays', { page: 'CountriesPage', message: e?.response?.data?.message ?? e?.message });
       notifyError(e?.response?.data?.message ?? 'Erreur');
     },
@@ -150,7 +173,7 @@ export default function CountriesPage() {
   const deleteCountryMut = useMutation({
     mutationFn: (id: string) => countriesApi.delete(id),
     onSuccess: (_, id) => { qc.invalidateQueries({ queryKey: ['countries'] }); logger.action('Pays supprimé', { country_id: id }); notifySuccess('Pays supprimé'); },
-    onError: (e: any) => { logger.error('Erreur suppression pays', { page: 'CountriesPage', message: e?.response?.data?.message ?? e?.message }); notifyError(e?.response?.data?.message ?? 'Erreur'); },
+    onError: (e: ErreurApi) => { logger.error('Erreur suppression pays', { page: 'CountriesPage', message: e?.response?.data?.message ?? e?.message }); notifyError(e?.response?.data?.message ?? 'Erreur'); },
   });
 
   /* ── Shipping Rates (nouveau modèle : aérien + maritime par ligne) ── */
@@ -206,7 +229,7 @@ export default function CountriesPage() {
       notifySuccess(editRate ? 'Tarif mis à jour' : 'Tarif créé');
       closeShipModal();
     },
-    onError: (e: any) => {
+    onError: (e: ErreurApi) => {
       logger.error('Erreur mutation tarif transport', { page: 'CountriesPage', message: e?.response?.data?.message ?? e?.message });
       notifyError(e?.response?.data?.message ?? e?.message ?? 'Erreur');
     },
@@ -231,7 +254,7 @@ export default function CountriesPage() {
   const deleteShipMut = useMutation({
     mutationFn: (id: string) => shippingRatesApi.delete(id),
     onSuccess: (_, id) => { qc.invalidateQueries({ queryKey: ['shipping-rates'] }); logger.action('Tarif transport supprimé', { rate_id: id }); notifySuccess('Tarif supprimé'); },
-    onError: (e: any) => { logger.error('Erreur suppression tarif transport', { page: 'CountriesPage', message: e?.response?.data?.message ?? e?.message }); notifyError(e?.response?.data?.message ?? 'Erreur'); },
+    onError: (e: ErreurApi) => { logger.error('Erreur suppression tarif transport', { page: 'CountriesPage', message: e?.response?.data?.message ?? e?.message }); notifyError(e?.response?.data?.message ?? 'Erreur'); },
   });
 
   /* ── Service Rates ── */
@@ -279,7 +302,7 @@ export default function CountriesPage() {
       notifySuccess(editSvcRate ? 'Tarif mis à jour' : 'Tarif créé');
       closeSvcModal();
     },
-    onError: (e: any) => {
+    onError: (e: ErreurApi) => {
       logger.error('Erreur mutation tarif service', { page: 'CountriesPage', message: e?.response?.data?.message ?? e?.message });
       notifyError(e?.response?.data?.message ?? e?.message ?? 'Erreur');
     },
@@ -293,7 +316,7 @@ export default function CountriesPage() {
   const deleteSvcMut = useMutation({
     mutationFn: (id: string) => serviceRatesApi.delete(id),
     onSuccess: (_, id) => { qc.invalidateQueries({ queryKey: ['service-rates'] }); logger.action('Tarif service supprimé', { rate_id: id }); notifySuccess('Tarif supprimé'); },
-    onError: (e: any) => { logger.error('Erreur suppression tarif service', { page: 'CountriesPage', message: e?.response?.data?.message ?? e?.message }); notifyError(e?.response?.data?.message ?? 'Erreur'); },
+    onError: (e: ErreurApi) => { logger.error('Erreur suppression tarif service', { page: 'CountriesPage', message: e?.response?.data?.message ?? e?.message }); notifyError(e?.response?.data?.message ?? 'Erreur'); },
   });
 
   /* ── Taux de change (EUR -> FCFA) ── */
@@ -351,7 +374,7 @@ export default function CountriesPage() {
       notifySuccess('Taux de change mis à jour');
       closeTauxModal();
     },
-    onError: (e: any) => {
+    onError: (e: ErreurApi) => {
       logger.error('Erreur mutation taux de change', { page: 'CountriesPage', message: e?.response?.data?.message ?? e?.message });
       notifyError(e?.response?.data?.message ?? e?.message ?? 'Erreur');
     },
@@ -363,21 +386,6 @@ export default function CountriesPage() {
     { id: 'service'   as Tab, label: 'Tarifs services',  icon: Wrench, color: 'text-violet-600',  bg: 'bg-violet-50' },
     { id: 'taux'      as Tab, label: 'Taux de change',   icon: Coins,  color: 'text-emerald-600', bg: 'bg-emerald-50' },
   ];
-
-  const EmptyState = ({ icon: Icon, text }: { icon: React.ElementType; text: string }) => (
-    <tr><td colSpan={10} className="px-5 py-14 text-center">
-      <div className="flex flex-col items-center gap-2.5">
-        <div className="w-12 h-12 rounded-2xl bg-gray-100 flex items-center justify-center">
-          <Icon size={22} className="text-gray-300" />
-        </div>
-        <p className="text-sm text-gray-400 font-medium">{text}</p>
-      </div>
-    </td></tr>
-  );
-
-  const Th = ({ children }: { children: string }) => (
-    <th className="px-5 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">{children}</th>
-  );
 
   return (
     <div className="space-y-7">

@@ -7,7 +7,8 @@ import {
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { authApi } from '@/api/auth';
-import { PATHS } from '@/router';
+import { PATHS } from '@/router/paths';
+import type { User as Utilisateur } from '@/types';
 import { getInitials } from '@/utils/format';
 import { confirmLogout } from '@/utils/confirm';
 import { notifySuccess } from '@/utils/notify';
@@ -29,26 +30,17 @@ const NAV = [
   { to: '/nanei/admin/profile',          icon: User,            label: 'Mon Profil'        },
 ];
 
-export default function DashboardLayout() {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const { user, logout, refreshToken } = useAuthStore();
-  const navigate = useNavigate();
-
-  const handleLogout = async () => {
-    const ok = await confirmLogout();
-    if (!ok) return;
-    // Révoque le refresh token côté serveur (avant : '' → jamais révoqué).
-    try {
-      if (refreshToken) await authApi.logout(refreshToken);
-    } catch {
-      // Serveur injoignable : on déconnecte quand même localement.
-    }
-    logout();
-    navigate(PATHS.LOGIN);
-    notifySuccess('À bientôt !');
-  };
-
-  const SidebarContent = () => (
+/**
+ * Contenu de la barre latérale (affichée sur ordinateur, et en surimpression
+ * sur mobile). Composant de module : déclaré dans le rendu de DashboardLayout,
+ * il était recréé à chaque rendu (sous-arbre démonté puis remonté).
+ */
+function SidebarContent({ user, onNavigate, onLogout }: {
+  user: Utilisateur | null;
+  onNavigate: () => void;
+  onLogout: () => void;
+}) {
+  return (
     <div className="flex flex-col h-full">
       {/* Logo */}
       <div className="px-6 py-6 border-b border-white/10">
@@ -72,7 +64,7 @@ export default function DashboardLayout() {
           <NavLink
             key={to}
             to={to}
-            onClick={() => setSidebarOpen(false)}
+            onClick={onNavigate}
             className={({ isActive }) =>
               `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 group ${
                 isActive
@@ -100,7 +92,7 @@ export default function DashboardLayout() {
           </div>
         </div>
         <button
-          onClick={handleLogout}
+          onClick={onLogout}
           className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-red-400 hover:bg-red-500/10 hover:text-red-300 transition-all"
         >
           <LogOut size={16} />
@@ -109,12 +101,32 @@ export default function DashboardLayout() {
       </div>
     </div>
   );
+}
+
+export default function DashboardLayout() {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { user, logout, refreshToken } = useAuthStore();
+  const navigate = useNavigate();
+
+  const handleLogout = async () => {
+    const ok = await confirmLogout();
+    if (!ok) return;
+    // Révoque le refresh token côté serveur (avant : '' → jamais révoqué).
+    try {
+      if (refreshToken) await authApi.logout(refreshToken);
+    } catch {
+      // Serveur injoignable : on déconnecte quand même localement.
+    }
+    logout();
+    navigate(PATHS.LOGIN);
+    notifySuccess('À bientôt !');
+  };
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50">
       {/* Desktop Sidebar */}
       <aside className="hidden lg:flex flex-col w-60 bg-[#1E1E1E] flex-shrink-0">
-        <SidebarContent />
+        <SidebarContent user={user} onNavigate={() => setSidebarOpen(false)} onLogout={handleLogout} />
       </aside>
 
       {/* Mobile Sidebar Overlay */}
@@ -122,7 +134,7 @@ export default function DashboardLayout() {
         <div className="lg:hidden fixed inset-0 z-40 flex">
           <div className="absolute inset-0 bg-black/50" onClick={() => setSidebarOpen(false)} />
           <aside className="relative w-64 bg-[#1E1E1E] h-full flex flex-col z-50">
-            <SidebarContent />
+            <SidebarContent user={user} onNavigate={() => setSidebarOpen(false)} onLogout={handleLogout} />
           </aside>
         </div>
       )}

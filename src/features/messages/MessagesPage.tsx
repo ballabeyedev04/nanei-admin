@@ -10,6 +10,7 @@ import { ErreurChargement } from '@/components/ui/ErreurChargement';
 import { PageSpinner } from '@/components/ui/Spinner';
 import { formatDate } from '@/utils/format';
 import { notifySuccess, notifyError } from '@/utils/notify';
+import type { ErreurApi } from '@/utils/erreurApi';
 
 export default function MessagesPage() {
   const [search, setSearch] = useState('');
@@ -37,7 +38,7 @@ export default function MessagesPage() {
       setSelected(null);
       setReponse('');
     },
-    onError: (e: any) => notifyError(e?.response?.data?.message ?? 'Erreur lors de l\'envoi'),
+    onError: (e: ErreurApi) => notifyError(e?.response?.data?.message ?? 'Erreur lors de l\'envoi'),
   });
 
   const handleEnvoyer = () => {

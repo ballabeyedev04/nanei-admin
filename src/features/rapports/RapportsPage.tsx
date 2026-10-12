@@ -11,6 +11,7 @@ import { PageSpinner } from '@/components/ui/Spinner';
 import { downloadBlob, messageErreurTelechargement } from '@/utils/download';
 import { notifySuccess, notifyError } from '@/utils/notify';
 import type { Rapport } from '@/types';
+import { erreurApi, type ErreurApi } from '@/utils/erreurApi';
 
 export default function RapportsPage() {
   const [downloading, setDownloading] = useState<string | null>(null);
@@ -35,7 +36,7 @@ export default function RapportsPage() {
       logger.action('Rapport généré');
       notifySuccess('Rapport généré avec succès');
     },
-    onError: (e: any) => {
+    onError: (e: ErreurApi) => {
       logger.error('Erreur génération rapport', { page: 'RapportsPage', message: e?.response?.data?.message ?? e?.message });
       notifyError(e?.response?.data?.message ?? 'Erreur lors de la génération');
     },
@@ -47,8 +48,9 @@ export default function RapportsPage() {
       logger.action('Export déclenché', { type: 'rapport', format: 'pdf', filename: rapport.filename });
       const res = await rapportsApi.download(rapport.filename);
       downloadBlob(res.data as Blob, rapport.filename);
-    } catch (err: any) {
-      logger.error('Erreur téléchargement rapport', { page: 'RapportsPage', filename: rapport.filename, message: (err as Error).message });
+    } catch (exception) {
+      const err = erreurApi(exception);
+      logger.error('Erreur téléchargement rapport', { page: 'RapportsPage', filename: rapport.filename, message: err.message });
       notifyError(await messageErreurTelechargement(err, 'Impossible de télécharger ce rapport'));
     } finally {
       setDownloading(null);

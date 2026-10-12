@@ -14,6 +14,7 @@ import { formatDate } from '@/utils/format';
 import { downloadBlob, messageErreurTelechargement } from '@/utils/download';
 import { notifyError, notifySuccess } from '@/utils/notify';
 import type { Colis } from '@/types';
+import { erreurApi } from '@/utils/erreurApi';
 
 export default function EtiquettesPage() {
   const [search, setSearch] = useState('');
@@ -46,7 +47,8 @@ export default function EtiquettesPage() {
       const res = await etiquettesApi.telecharger(c.id);
       downloadBlob(res.data as Blob, `etiquette-${c.reference}.pdf`);
       logger.action('Étiquette téléchargée', { colis_id: c.id, reference: c.reference });
-    } catch (err: any) {
+    } catch (exception) {
+      const err = erreurApi(exception);
       logger.error('Erreur téléchargement étiquette', { page: 'EtiquettesPage', colis_id: c.id, message: err?.message });
       notifyError(await messageErreurTelechargement(err, "Impossible de télécharger l'étiquette"));
     } finally {
@@ -63,7 +65,8 @@ export default function EtiquettesPage() {
       downloadBlob(blob, `etiquette-${c.reference}.zpl`);
       logger.action('Étiquette ZPL téléchargée', { colis_id: c.id, reference: c.reference });
       setZplModal({ reference: c.reference, content });
-    } catch (err: any) {
+    } catch (exception) {
+      const err = erreurApi(exception);
       logger.error('Erreur téléchargement étiquette ZPL', { page: 'EtiquettesPage', colis_id: c.id, message: err?.message });
       notifyError(await messageErreurTelechargement(err, 'Impossible de télécharger le fichier ZPL'));
     } finally {

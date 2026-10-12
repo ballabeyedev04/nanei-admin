@@ -1,0 +1,150 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  Nanei — retour arrière MANUEL de l'interface d'administration
+# ═══════════════════════════════════════════════════════════════════════════
+#
+#  Rebascule le lien /var/www/nanei-admin vers une version encore présente
+#  sur le serveur (les 5 dernières sont conservées), puis vérifie en ligne.
+#  Instantané : rien n'est reconstruit, rien n'est supprimé.
+#
+#   Lancer    : Actions > « Admin — retour arrière » > Run workflow
+#   Versions  : laisser « precedente », ou donner un nom exact
+#               (ex. 20261012-153000-abc1234 ; liste dans le résumé de chaque
+#               exécution, ou « Lister seulement »)
+#   Procédure : docs/DEPLOIEMENT_ADMIN.md, « Retour arrière manuel »
+
+name: Admin — retour arrière
+run-name: >-
+  ${{ inputs.lister_seulement && '📜 Versions présentes sur le serveur' || format('↩️ Retour arrière vers {0}', inputs.version) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version à remettre en ligne : « precedente » ou un nom exact (AAAAMMJJ-HHMMSS-sha)"
+        type: string
+        required: true
+        default: precedente
+      raison:
+        description: "Raison (inscrite dans le résumé)"
+        type: string
+        required: false
+        default: ""
+      lister_seulement:
+        description: "Lister les versions présentes sans rien changer"
+        type: boolean
+        default: false
+
+# Jamais deux retours arrière en même temps ; le verrou du serveur (flock)
+# empêche en plus tout chevauchement avec une mise en service en cours.
+concurrency:
+  group: admin-retour-arriere
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  ADMIN_URL: https://admin.app-nanei.com
+
+jobs:
+  retour:
+    name: ✋ Approbation & retour arrière
+    runs-on: ubuntu-24.04 # figé : un changement de système se décide, il ne se subit pas
+    timeout-minutes: 20
+    # Même environnement que la mise en service : mêmes relecteurs.
+    environment:
+      name: production
+      url: ${{ env.ADMIN_URL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # le jeton GitHub ne reste pas sur la machine
+
+      - name: Demande
+        env:
+          VERSION: ${{ inputs.version }}
+          RAISON: ${{ inputs.raison }}
+          LISTER: ${{ inputs.lister_seulement }}
+        run: |
+          # Valeur saisie à la main : contrôlée avant d'être passée au serveur.
+          if [[ ! "$VERSION" =~ ^(precedente|précédente|[0-9]{8}-[0-9]{6}-[A-Za-z0-9]+)$ ]]; then
+            echo "::error::Version invalide : « $VERSION » (precedente, ou AAAAMMJJ-HHMMSS-sha)"
+            exit 1
+          fi
+          {
+            if [ "$LISTER" = "true" ]; then
+              echo "## 📜 Versions de l'admin présentes sur le serveur"
+            else
+              echo "## ↩️ Retour arrière de l'admin"
+              echo ""
+              echo "- Cible demandée : \`$VERSION\`"
+              echo "- Raison : ${RAISON:-non précisée}"
+              echo "- Demandé par : @${GITHUB_ACTOR}"
+            fi
+            echo ""
+            echo "| Étape | Résultat | |"
+            echo "|---|---|:---:|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Accès SSH au serveur
+        uses: ./.github/actions/acces-ssh
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          user: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          known-hosts: ${{ secrets.VPS_KNOWN_HOSTS }}
+          port: ${{ vars.VPS_PORT || '22' }}
+
+      - name: Envoi du script
+        run: |
+          DOSSIER="$(ssh nanei-vps 'mktemp -d /tmp/nanei-admin-retour.XXXXXX')"
+          [[ "$DOSSIER" =~ ^/tmp/nanei-admin-retour\.[A-Za-z0-9]+$ ]] || { echo "::error::Dossier temporaire inattendu sur le serveur : $DOSSIER"; exit 1; }
+          echo "DOSSIER_DISTANT=$DOSSIER" >> "$GITHUB_ENV"
+          scp -q deploy/mettre-en-service.sh "nanei-vps:$DOSSIER/"
+
+      - name: Versions présentes (avant)
+        run: |
+          # shellcheck disable=SC2029 # expansion locale voulue : valeurs contrôlées avant l'envoi au serveur
+          ssh nanei-vps "bash '$DOSSIER_DISTANT/mettre-en-service.sh' lister" 2> versions.txt
+          cat versions.txt
+          { echo ""; echo "<details open><summary>Versions sur le serveur (* = servie)</summary>"; echo ""; echo '```'; cat versions.txt; echo '```'; echo "</details>"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Rebascule du lien
+        if: ${{ !inputs.lister_seulement }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # shellcheck disable=SC2029 # expansion locale voulue : valeurs contrôlées avant l'envoi au serveur
+          if ! ssh nanei-vps "bash '$DOSSIER_DISTANT/mettre-en-service.sh' revenir '$VERSION'" > retour.txt; then
+            echo "| Rebascule | refusée par le serveur (version absente, déjà servie…) — rien n'a changé | ❌ |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Retour arrière refusé : voir le journal de cette étape. La version en ligne n'a pas changé."
+            exit 1
+          fi
+          cat retour.txt
+          AVANT="$(sed -n 's/^VERSION_PRECEDENTE=//p' retour.txt)"
+          APRES="$(sed -n 's/^VERSION_ACTUELLE=//p' retour.txt)"
+          echo "SHA_ATTENDU=$(sed -n 's/^SHA_ACTUEL=//p' retour.txt)" >> "$GITHUB_ENV"
+          echo "VERSION_ACTUELLE=$APRES" >> "$GITHUB_ENV"
+          echo "| Rebascule | \`$AVANT\` → \`$APRES\` | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Vérification en ligne
+        if: ${{ !inputs.lister_seulement }}
+        run: |
+          # SHA vide : version initiale (antérieure à cette chaîne, sans version.json).
+          if bash deploy/verifier-en-ligne.sh "$ADMIN_URL" "$SHA_ATTENDU"; then
+            echo "| Vérification | \`$VERSION_ACTUELLE\` servie par ${ADMIN_URL}, routes en 200 | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+            { echo ""; echo "✅ **Retour arrière effectué** : \`$VERSION_ACTUELLE\` est en ligne."; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Vérification | échec — le lien est rebasculé mais le site ne répond pas comme attendu | ❌ |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Lien rebasculé vers $VERSION_ACTUELLE mais la vérification en ligne échoue : vérifier Nginx sur le serveur (docs/DEPLOIEMENT_ADMIN.md)."
+            exit 1
+          fi
+
+      - name: Nettoyage
+        if: always()
+        run: |
+          if [ -n "${DOSSIER_DISTANT:-}" ]; then
+            # shellcheck disable=SC2029 # expansion locale voulue : valeurs contrôlées avant l'envoi au serveur
+            ssh nanei-vps "rm -rf -- '$DOSSIER_DISTANT'" || true
+          fi
+          rm -f ~/.ssh/nanei_deploy ~/.ssh/config

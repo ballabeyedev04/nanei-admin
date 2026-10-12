@@ -12,7 +12,8 @@ export const authApi = {
     api.get<{ utilisateur: User }>('/account/me'),
 
   updateProfile: (data: { nom?: string; prenom?: string; telephone?: string; adresse?: string }) =>
-    api.put('/account/modifier-profil', data),
+    // Selon la version du back, l'utilisateur à jour est dans `utilisateur` ou `user`.
+    api.put<{ utilisateur?: User; user?: User }>('/account/modifier-profil', data),
 
   // Le backend attend { oldPassword, newPassword } (voir changePasswordSchema).
   // Le middleware de validation retire les clés inconnues : envoyer

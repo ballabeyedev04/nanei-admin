@@ -1,15 +1,30 @@
 import { api } from './axios';
-import type { PageListe, Reclamation, StatutReclamation, TypeReclamation } from '@/types';
+import type { PageListe, Pagination, Reclamation, StatutReclamation, TypeReclamation } from '@/types';
 import { nettoyerParams, versPage } from './pagination';
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+/** Réclamation telle que le back la renvoie (colonnes et associations Sequelize). */
+interface ReclamationBrute {
+  id: string;
+  type?: string;
+  statut: StatutReclamation;
+  description?: string | null;
+  /** Tableau JSON, ou chaîne JSON selon le dialecte SQL. */
+  photos?: unknown;
+  commentaire_admin?: string | null;
+  createdAt?: string;
+  created_at?: string;
+  updatedAt?: string;
+  updated_at?: string;
+  colis?: { reference?: string | null; destination?: string | null } | null;
+  utilisateur?: { nom?: string | null; prenom?: string | null; email?: string | null; telephone?: string | null } | null;
+}
 
 /**
  * Le back renvoie `{ success, reclamations }` et, pour chaque réclamation,
  * `colis.reference`, `utilisateur` et `commentaire_admin` (pas `client`,
  * `colisReference` ni `historique`) : on convertit ici au format de l'écran.
  */
-function versReclamation(r: any): Reclamation {
+function versReclamation(r: ReclamationBrute): Reclamation {
   // Le back stocke `endommagé` (avec accent) ; on tolère l'ancienne valeur.
   const type = (r.type === 'endommage' ? 'endommagé' : r.type) as TypeReclamation;
   let photos: unknown = r.photos;
@@ -31,7 +46,8 @@ function versReclamation(r: any): Reclamation {
     description: r.description ?? '',
     photos: Array.isArray(photos) ? (photos as string[]).filter(Boolean) : [],
     commentaireAdmin: r.commentaire_admin ?? undefined,
-    createdAt: r.createdAt ?? r.created_at,
+    // Toujours présent dans les réponses du back (horodatage Sequelize).
+    createdAt: (r.createdAt ?? r.created_at) as string,
     updatedAt: r.updatedAt ?? r.updated_at,
   };
 }
@@ -41,15 +57,18 @@ export const reclamationsApi = {
   list: async (
     params?: { statut?: StatutReclamation; page?: number; limit?: number },
   ): Promise<PageListe<Reclamation>> => {
-    const res = await api.get('/admin/reclamations', { params: nettoyerParams(params) });
-    const raw = res.data as any;
-    return versPage(((raw.reclamations ?? raw.data ?? []) as any[]).map(versReclamation), raw.pagination);
+    const res = await api.get<{ reclamations?: ReclamationBrute[]; data?: ReclamationBrute[]; pagination?: Pagination | null }>(
+      '/admin/reclamations', { params: nettoyerParams(params) },
+    );
+    const raw = res.data;
+    return versPage((raw.reclamations ?? raw.data ?? []).map(versReclamation), raw.pagination);
   },
   /** Le back lit `commentaire_admin` (envoyé au client par e-mail et SMS). */
   update: async (id: string, statut: StatutReclamation, commentaire?: string): Promise<Reclamation> => {
     const corps: Record<string, unknown> = { statut };
     if (commentaire !== undefined) corps.commentaire_admin = commentaire;
-    const res = await api.put(`/admin/reclamations/${id}`, corps);
-    return versReclamation((res.data as any).reclamation ?? {});
+    const res = await api.put<{ reclamation?: ReclamationBrute }>(`/admin/reclamations/${id}`, corps);
+    // Réponse sans réclamation : objet vide converti (comportement historique).
+    return versReclamation(res.data.reclamation ?? ({} as ReclamationBrute));
   },
 };

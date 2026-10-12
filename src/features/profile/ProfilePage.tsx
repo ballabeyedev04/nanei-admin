@@ -7,6 +7,7 @@ import logger from '@/lib/logger';
 import { Modal } from '@/components/ui/Modal';
 import { getInitials } from '@/utils/format';
 import { notifySuccess, notifyError } from '@/utils/notify';
+import type { ErreurApi } from '@/utils/erreurApi';
 
 function Field({ label, icon: Icon, children }: { label: string; icon: React.ElementType; children: React.ReactNode }) {
   return (
@@ -42,14 +43,14 @@ export default function ProfilePage() {
   const updateMut = useMutation({
     mutationFn: authApi.updateProfile,
     onSuccess: (res) => {
-      const updated = (res.data as any).utilisateur ?? (res.data as any).user ?? null;
+      const updated = res.data.utilisateur ?? res.data.user ?? null;
       if (updated) setUser(updated);
       qc.invalidateQueries({ queryKey: ['me'] });
       logger.action('Profil admin mis à jour', { admin_id: user?.id });
       notifySuccess('Profil mis à jour');
       setShowProfileModal(false);
     },
-    onError: (e: any) => {
+    onError: (e: ErreurApi) => {
       // 400 Joi : `details` contient la raison précise (ex. téléphone invalide).
       const data = e?.response?.data;
       const details: string[] | undefined = Array.isArray(data?.details) ? data.details : undefined;
@@ -77,7 +78,7 @@ export default function ProfilePage() {
       notifySuccess('Mot de passe modifié');
       closePwModal();
     },
-    onError: (e: any) => {
+    onError: (e: ErreurApi) => {
       const data = e?.response?.data;
       const details: string[] | undefined = Array.isArray(data?.details) ? data.details : undefined;
       const msg = details?.length ? details.join(' • ') : (data?.message ?? e?.message ?? 'Erreur');

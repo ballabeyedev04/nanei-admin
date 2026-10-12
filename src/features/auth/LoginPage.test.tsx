@@ -16,7 +16,7 @@ import LoginPage from './LoginPage';
  * `identifiant` (schéma Joi loginSchema : 400 « Données invalides »).
  */
 // Le routeur réel importe tous les écrans : seules les routes sont utiles ici.
-vi.mock('@/router', () => ({ PATHS: { DASHBOARD: '/nanei/admin/dashboard', FORGOT_PASSWORD: '/nanei/admin/forgot-password' } }));
+vi.mock('@/router/paths', () => ({ PATHS: { DASHBOARD: '/nanei/admin/dashboard', FORGOT_PASSWORD: '/nanei/admin/forgot-password' } }));
 vi.mock('@/utils/notify', () => ({ notifySuccess: vi.fn(), notifyError: vi.fn(), notifyInfo: vi.fn() }));
 
 const ADMIN = { id: 'a1', nom: 'Ba', prenom: 'Awa', email: 'awa@nanei.com', role: 'Admin', statut: 'actif' };

@@ -2,8 +2,6 @@ import axios from 'axios';
 import { api } from './axios';
 import type { PreuveLivraison } from '@/types';
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 export const preuveLivraisonApi = {
   /**
    * Le back renvoie `{ success, preuve: { photo_url, gps_lat, gps_lng, … } }`,
@@ -11,10 +9,10 @@ export const preuveLivraisonApi = {
    */
   get: async (colisId: string): Promise<PreuveLivraison | null> => {
     try {
-      const res = await api.get(`/admin/colis/${colisId}/preuve`);
-      const raw = res.data as any;
+      const res = await api.get<{ preuve?: PreuveLivraison | null; data?: PreuveLivraison | null }>(`/admin/colis/${colisId}/preuve`);
+      const raw = res.data;
       const preuve = raw.preuve ?? raw.data ?? null;
-      return preuve && preuve.photo_url ? (preuve as PreuveLivraison) : null;
+      return preuve && preuve.photo_url ? preuve : null;
     } catch (err) {
       if (axios.isAxiosError(err) && err.response?.status === 404) return null;
       throw err;

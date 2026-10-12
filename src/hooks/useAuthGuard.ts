@@ -13,13 +13,12 @@ const SESSION_INVALID_CODES = new Set([401, 403, 404]);
  */
 export function useAuthGuard() {
   const { token, clearAuth, setUser } = useAuthStore();
-  const [checking, setChecking] = useState(true);
+  // Sans aucun jeton, il n'y a rien à vérifier : pas d'état « vérification »
+  // (avant : true puis false aussitôt dans l'effet, soit un rendu en cascade).
+  const [checking, setChecking] = useState(() => Boolean(token || useAuthStore.getState().refreshToken));
 
   useEffect(() => {
-    if (!token && !useAuthStore.getState().refreshToken) {
-      setChecking(false);
-      return;
-    }
+    if (!checking) return;
 
     authApi.me()
       .then((res) => {
@@ -40,7 +39,11 @@ export function useAuthGuard() {
       })
       .finally(() => setChecking(false));
 
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // Vérification UNE seule fois, au montage du garde : la relancer à chaque
+    // changement de jeton (renouvellement automatique) referait un appel
+    // /account/me et réafficherait le spinner en pleine navigation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return { checking };
 }
